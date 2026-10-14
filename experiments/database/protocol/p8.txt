@@ -1,0 +1,130 @@
+2026-10-13T04:41:52Z  written before any request about an evaluation row of this stage was sent to any model, and before the analysis was run on anything but made-up rows
+
+Stage 8: how should a semantic join ask a decision model? One request per candidate pair, or one request per left record?
+
+Why this stage. Every benefit that held in stages 1-7 was either independent of the model (join rewriting, packing predicates) or bound to
+one situation (cascades on record matching, the text cache on long documents). The survey in misc/ResearchandInvestigation.md describes two
+properties of decision models that the earlier stages never put to a test on a join: the state is encoded once and every question runs as
+its own branch, and latency does not grow with the number of options. If they hold on real rows, the inner loop of a semantic nested-loop
+join (one left record against its k candidates) fits in one request. The same survey lists the risk: answers depend on the order and the set
+of options (its hard constraint 3, "permutation tests are required"), which no earlier stage measured. Prior work this is checked against:
+selecting among candidates instead of matching pairs works for generative LLMs but has position bias (Wang et al., "Match, Compare, or
+Select?", COLING 2025); a production engine rewrites semantic joins into multi-label classification (Cortex AISQL, arXiv 2511.07663);
+JEVDB (arXiv 2610.02046) prunes candidate pairs first and then asks pair by pair.
+
+What was known when this was written
+- table_match/ (2026-10-05): Jev's pair-by-pair judgments on the same candidates. Abt-Buy, 10 candidates per left record (10,747 pairs):
+  F1 90.7%, 543 input tokens per pair, 210 s. DBLP-Scholar (26,160 pairs): F1 90.7%, 461 input tokens per pair, 517 s.
+- Nothing about any packed form on any real row: neither Jev nor Kev-4B has been sent one.
+- A rehearsal on made-up rows only (2026-10-13; 12 invented left records x 12 invented candidates per dataset, in no dataset). Both
+  backends accept all three packed forms. Jev: per-request latency did not grow with the number of candidates (0.31-0.35 s for 1, 5, 10 and
+  12 candidates); input tokens for 10 candidates were 40% (Q), 39% (S) and 21% (C) of ten pair requests. Kev-4B: tokens 73% (Q, S) and 29% (C)
+  of the pair requests, time 52-56% (Q, S) and 24% (C). So before any real row was asked it was already likely that the cost line below is met
+  on Jev, and missed by Q and S on Kev-4B, where a request costs time in proportion to its tokens and carries little fixed overhead. Quality
+  and order sensitivity on real rows were not known; on the made-up rows Jev's decisions were identical across forms and orders, Kev-4B's
+  were not (S and C changed with the order). The lines are kept as written in database/p8_join.py before the rehearsal.
+
+Data (table_match/, both with the complete human mapping; the stored BM25 candidates and the stage's first-draft questions are reused unchanged)
+- abt-buy: 1,081 x 1,092 products, 1,097 true pairs, close to one-to-one. dblp-scholar: 2,616 x 64,263 publications, 5,347 true pairs, a
+  left record often has several matches. k = 10 candidates per left record, as stored on 2026-10-02.
+- Subset: the first 400 left records of each dataset by sha256("p8|<dataset>|<left id>"). Scaling rows: the first 80 of the abt-buy subset.
+
+Forms (database/p8_join.py, build). The pair question and its criteria are the ones Jev answered in table_match/.
+- pair  state = both records, one yes/no question. The baseline.
+- Q     state = the left record; k yes/no questions, each carrying one candidate inside its instructions ({"question": ..., "record_b": ...}).
+- S     state = the left record and all k candidates; k yes/no questions, each pointing at one candidate (`candidates.c3`).
+- C     state = the left record; one choice question whose options are the k candidates plus "none". At most one match per left record,
+        so it is a join method only where matches are close to one-to-one: run on abt-buy only.
+Orders of the candidates inside a request: random (by hash; the primary order, neutral to position), rank (BM25 rank), reversed.
+A decision on a candidate pair: p >= 0.5 for yes/no forms; "this candidate is the chosen option" for C. No threshold or prompt is tuned.
+
+Backends
+- jev: jev-1.13.0 through the official API, concurrency 16. Full tables in random order; the subset in all three orders; the pair form
+  re-asked today on the subset (fresh cache namespace) for timing and as a drift control.
+- kev-4b: exactly as in stages 6 and 7 (kev-1.0, weights v1.0, MLX, shipped settings, sandboxed), concurrency 16. Subset only, to keep the
+  run near 100 minutes: pair; Q and S in random and rank order; C in all three orders.
+
+Measures
+- End-to-end precision / recall / F1 against the full mapping: true pairs that the candidate step missed count as misses, as in table_match/.
+- Reference for quality: on Jev, the 2026-10-05 pair judgments on the full table (control: today's pair judgments on the subset must agree
+  with them on at least 97% of pairs, the stage-6 bar; otherwise the comparison is flagged). On Kev-4B, its own pair judgments on the subset.
+- Cost: requests; input tokens as reported by the backend; wall time of the subset runs, all asked fresh and one after another on the same day.
+
+Lines (per backend; a packed form "holds" if all three are met on every dataset it is run on)
+- L1 quality: F1(packed, random order) >= F1(pair) - 1.0 point. The point estimate decides; a paired bootstrap over left records
+  (2,000 resamples) gives the 95% interval of the difference, and an interval that contains -1.0 is reported as not separable from the line.
+- L2 cost: on the subset, input tokens <= 50% of the pair form's AND wall time <= 50% of the pair form's (requests are 1/k by construction).
+- L3 order: on the subset, decisions agree on >= 99.0% of candidate pairs between every two orders that were run, and the F1 values of
+  those orders differ by <= 1.0 point. (Jev asked twice agrees with itself on 99.45-99.8% of decisions.)
+
+Reported next to the lines, with no line of their own
+- Agreement of each packed form with the pair form and the mean difference in probability; Brier score, equal-mass calibration error and
+  the share of errors among the 30% least confident pairs (is a cascade still possible on top of a packed form).
+- C: accuracy by the position of the true match, how often the first three positions and "none" are chosen, accuracy above and below
+  confidence 0.9.
+- Scaling (Jev, 80 rows, concurrency 1, fresh): per-request latency and tokens for 1 (pair), 5, 10, 20 and 40 candidates, and whether the
+  decisions on the five best-ranked candidates change as more candidates are added (the set effect).
+- After the verdicts, a demonstration with no line: the packed form with the best full-table F1 among those that hold on Jev is added to
+  src/jevsql as a SQL function, and the abt-buy join is run as one DuckDB statement over the stored candidates. Replayed from this stage's
+  cache it must return exactly the matches of the script; one fresh run gives its end-to-end time and cost. Skipped if no form holds.
+
+Rules of collection
+- One command, database/p8_run.sh. A failed request is re-asked in up to 4 passes; what still has no answer counts as "not a match" and is
+  reported. Jev spending is capped at $3.00 (expected: about $1.3); beyond it collection stops and what exists is reported.
+- Until all collection is finished only counts, timings and token totals are looked at; no answer is examined and no question, order,
+  threshold or line is changed. Anything added after the results are seen is marked post hoc.
+- Kev-4B is never fitted or calibrated on Jev's output (nothing in this stage fits anything).
+57f5c9deed34ca094523ac51e3e16eac2a84d4d6df032aa4b727d6164ee97b90  database/p8_join.py
+fcb4b5061833cdfbe9969937b52273ee66fedc8a098e329f471121aaaec8cc46  database/p8_run.sh
+a8658390354644d6e82e40f3d5a78a09bfa8ac8d635fbc5d3af25ee4e6b7a008  tests/test_p8.py
+2b849808fa7cbed9d7b2d38158a1ce394aae6c766e532baec2e355ff39ebd711  table_match/pipeline.py
+7e8033ad9a29a76929075b1ccb46decc6feed92a9af9cb9167fd73b879d1f8fb  entity_match/run.py
+03f7ae5a4574f5d3c9f8ec34a60b21fea3fd0b81ff51ba4f0dcee1f574b24b89  src/jevsql/engine.py
+2fa07f7b7ce690dcd03d33362b480e4c350f287c341a89bfe00187f799126095  src/jevsql/open_models.py
+8896feb8566a6dd14f24d4ebe243ca61e8b50d92b4d3461498ee8c6728bffbb4  out/table_match/abt-buy.candidates.json
+d204d6c50080624cdccc8695793dde92e24429af9e897266d5cc001f605b824b  out/table_match/dblp-scholar.candidates.json
+
+2026-10-13T06:44:04Z  execution record, verdicts, a correction, and what was added after the results were seen
+
+Execution. One run of database/p8_run.sh, 2026-10-13T04:42:11Z to 06:38:22Z (1 h 56 min), not interrupted, no deviation from the rules
+above. 48 steps, all complete, no request without an answer (Jev 23,490 requests in 13 min; Kev-4B 13,175 requests in 1 h 43 min).
+Jev spending: $1.214 for the collection, $0.021 for the two rehearsals before the timestamp at the top (the second after fixing two bugs
+found by the first: result files of different k shared one name; the report divided by zero when every request was a cache hit), $0.054
+for the fresh SQL run below. Two things that explain counts: the pair form sent 3,954 distinct requests for the 3,975 abt-buy subset pairs
+(identical record pairs are asked once); in the k = 40 scaling steps 2 of the 80 requests equal their k = 20 request (left records with at
+most 20 candidates) and were served from the cache with their earlier latency.
+
+Control. Today's pair judgments against those of 2026-10-05 on the subset: 99.97% (abt-buy) and 99.80% (dblp-scholar) agreement; bar 97%.
+
+Verdicts (out/database/p8/report.txt)
+- jev: Q holds (both datasets). S does not hold (L3 fails on dblp-scholar: 97.90% agreement between orders, F1 88.4-90.1). C holds (abt-buy).
+- kev-4b: none holds. Q meets L1 and L3 (decisions identical in both orders) and misses L2 (time 53% and 59%, tokens 62% and 73% of the
+  pair form). S fails L3 on both datasets and L1 on dblp-scholar. C fails L3 (F1 87.9 / 73.5 / 92.3 in random / rank / reversed order).
+
+Correction to "Why this stage" above. It says JEVDB "prunes candidate pairs first and then asks pair by pair". That is wrong, and it was
+written without checking the paper for it. Read again after the results (2026-10-13): JEVDB judges pairs with yes/no questions but sends
+them in one of three request layouts - separate, packed ("bundles multiple independent string pairs into a single network payload") and
+star ("attaches candidate counterparts as distinct questions within the same request", the anchor record sent once) - and picks between
+star and pack by the average number of candidates per anchor. The star layout is this stage's form Q. So Q is not a new way of asking; what
+this stage adds for it is the measurement the paper does not report: quality against the pair form on complete human mappings, tokens and
+latency per request, and order tests. The paper does not use a choice question to pick a join partner and reports no order or permutation
+test; form C and the order results are not covered by it. The lines and verdicts do not depend on this sentence.
+
+Demonstration named above (database/p8_demo.py). C has the best full-table F1 among the forms that hold on Jev, so it became the SQL
+function <prefix>_pick in src/jevsql/sql.py. The abt-buy join as one DuckDB statement: replayed from this stage's cache it returns exactly
+the script's 1,002 matches with no request sent; one fresh run took 26.9 s, 1,081 requests, $0.054, F1 94.1%, and differs from the
+collected run in 7 pairs (3 only in the fresh run, 4 only in the collected one), which is Jev's own run-to-run variation.
+
+Post hoc (added after the results were seen; none of it changes a verdict)
+- <prefix>_match (form Q) was added to src/jevsql as well, and replayed on both datasets: identical to the script's matches.
+- database/p8_posthoc.py, out/database/p8/posthoc.txt. A: keeping at most one match per left record (the most probable one, if p >= 0.5)
+  applied to the yes/no forms on abt-buy - on Jev pair + at-most-one reaches F1 92.8% (pair 90.7%, C 94.0%; C is still 1.2 points higher,
+  interval 0.3 to 2.1), on Kev-4B it lifts pair from 85.6% to 93.7% and S from 86.9% to 95.7%, above its own C (87.9%). B: averaging
+  Kev-4B's choice probabilities over orders gives 90.5-90.6%, between its worst and best single order. C: full-table token, cost and time
+  totals. D: input tokens per pair as counted by each backend (Jev counts about 300 more per pair request than Kev-4B).
+3112d7a067f7d9fda51a991f5bc1f640f818598523fa0bf45c958ec824d37ea0  database/p8_posthoc.py
+4b6697cf897a204ecb64378db01043044312b8644e3907e13c2d44edf93035c5  database/p8_demo.py
+e89d836f771edd2c22c25380845d2d0a41954c685ed28f949c3ed5bfe69738c4  src/jevsql/sql.py
+da21160faf1811c414c3fe049efdf6bad82a9519a01d3813a1948c1fdf8e563a  tests/test_p8.py
+1b6371e8e7d3951f8327bef9cc764f0c09af27f55cc2c66312413df7a3aca229  tests/test_sql.py
+57f5c9deed34ca094523ac51e3e16eac2a84d4d6df032aa4b727d6164ee97b90  database/p8_join.py

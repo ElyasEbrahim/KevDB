@@ -1,0 +1,113 @@
+2026-10-13T10:58:08Z  written before any request of a packed form about a real review was sent to any model, and before the analysis was run on anything but made-up reviews
+
+Stage 9: does the packed way of asking a semantic join (stage 8) carry over to a join that is not record matching?
+
+Why this stage. Stage 8 found that, on Jev, sending a left record with its 10 candidates as 10 yes/no questions in one request (form Q,
+the "star" layout of JEVDB) keeps F1, costs 38% of the input tokens and 10% of the time, and does not depend on the order of the
+candidates. Both datasets were record matching, the one kind of predicate on which Jev was already known to be strong. This stage asks the
+same three lines of a different predicate: whether two movie reviews express the same, or opposite, sentiment.
+
+What was known when this was written
+- Stage 1 (2026-10-07): Jev's pair-by-pair answers to both questions on all 8,128 pairs (cached; Q7, all opposite pairs: F1 0.732 by
+  SemBench's evaluator, 153 s, 3.34M input tokens = 411 per pair), and the rewritten query that judges each of the 128 reviews once and
+  joins on the two judgments (Q7r: F1 0.79, 128 requests). So for this particular predicate the best plan is already known and is not a
+  packed pairwise form; what is tested here is only whether packing changes what the model answers about a pair, and what it costs.
+- Stage 7 (2026-10-12): Kev-4B's pair-by-pair answers to "opposite" on all 8,128 pairs (cached; Q7 F1 0.530, 1,412 s, 144 tokens per pair).
+- Stage 8 (2026-10-13), above. JEVDB reports quality deficits of its own on Movie Q5 and Q6, and no comparison between request layouts.
+- Nothing about a packed form on any of these reviews: no such request has been sent to either model.
+- Rehearsals on made-up reviews only (2026-10-13; 24 invented reviews, and one probe request per size with invented reviews). Jev accepts
+  127 questions in one request: 0.78 s against 0.33 s for 40 (one request each), 10,341 input tokens. Input tokens were 40%, 33% and 28% of the
+  pair form's at 5, 10 and 23 partners per request. Kev-4B at 10 partners: 77% of the tokens, 55% of the time. So before any real review was
+  asked it was already likely that the cost line is met on Jev at every block size and missed on Kev-4B. Quality and order sensitivity on
+  real reviews were not known; on the made-up reviews, which are trivially easy, every form gave the same decisions.
+
+Data (SemBench movie scenario, the 2,000-row sample; database/p1_movie.py)
+- The 128 distinct reviews of the movie used by Q5-Q7 (66 labelled positive, 62 negative) and all 8,128 pairs with reviewId1 < reviewId2.
+  Truth, as in SemBench's gold SQL: "same" = equal human sentiment labels (4,036 pairs), "opposite" = different labels (4,092 pairs).
+- Questions: the two stage-1 questions, unchanged ("same" for Q5, "opposite" for Q6 and Q7). No criteria, as in stage 1.
+
+Forms (database/p9_join.py, build)
+- pair  state = {review_1, review_2}, one yes/no question. Exactly the request of stage 1.
+- Q     state = {review_1}; one yes/no question per partner, carrying the partner inside its instructions ({"question": ..., "review_2": ...}).
+A review is paired with every review of larger id (up to 127 partners), cut into blocks of k partners: k = 10 (the block size of stage 8),
+40, and 127 (one request per review). Order of the partners before cutting: random (by hash; primary), natural (by id), reversed. A different
+order also puts different partners together in a block, so the order test covers the set effect too.
+A decision on a pair: p >= 0.5. Nothing is tuned. Every step uses its own cache namespace, so every request of every step is asked fresh.
+
+Backends
+- jev: jev-1.13.0, official API, concurrency 16. Both questions; the pair form on all pairs, asked again today; Q at all three k in all
+  three orders.
+- kev-4b: as in stages 6-8 (kev-1.0, weights v1.0, MLX, shipped settings, sandboxed), concurrency 16. Only "opposite" (the one question
+  its stage-7 answers cover completely), only k = 10, random and natural order. Its pair form is re-asked today on the pairs of 16 reviews
+  (672 pairs) to time it; quality is measured against its stage-7 pair answers on all pairs (its answers are deterministic; the 672 re-asked
+  pairs are compared with them as a control).
+
+Measures
+- Precision / recall / F1 over all 8,128 pairs against the human labels, per question.
+- Reference: the pair form's answers on the same pairs (Jev: today's; control: agreement with the stage-1 answers, bar 97% as in stage 6).
+- Cost: requests, input tokens as reported by the backend, wall time; per pair where the pair form was timed on a subset (Kev-4B).
+
+Lines, per backend and block size k; a block size "holds" if all three are met on every question that backend is asked
+- L1 quality: F1(Q, random order) >= F1(pair) - 1.0 point. The point estimate decides. The 95% interval of the difference comes from 2,000
+  resamples of reviews, not of pairs (a review is in 127 pairs): a pair's weight is the product of the times its two reviews were drawn.
+  An interval that contains -1.0 is reported as not separable from the line.
+- L2 cost: input tokens <= 50% of the pair form's AND wall time <= 50% of the pair form's.
+- L3 order: decisions agree on >= 99.0% of pairs between every two orders that were run, and their F1 values differ by <= 1.0 point.
+"The stage-8 result carries over to this predicate" = k = 10 holds on Jev. The largest k that holds is reported as well.
+
+Reported next to the lines, with no line of their own
+- The F1 that SemBench's own evaluator gives Q7 for each form (a check on the F1 computed here).
+- The rewritten plan of stage 1 on the same pairs (from its cached per-review judgments): how far any pairwise form is from it.
+- How often the two questions, which are each other's negation, are answered alike for the same pair, pair form against Q.
+- Agreement with the pair form, mean difference in probability, Brier score, calibration error, share of errors among the 30% least
+  confident pairs; per-request latency (median and 95th percentile) at each k.
+
+Rules of collection
+- One command, database/p9_run.sh. A failed request is re-asked in up to 4 passes; what still has no answer counts as "not a match" and is
+  reported. Jev spending is capped at $2.00 (expected: about $1.0); beyond it collection stops and what exists is reported.
+- Until all collection is finished only counts, timings and token totals are looked at; no answer is examined and no question, order,
+  block size or line is changed. Anything added after the results are seen is marked post hoc.
+- Kev-4B is never fitted or calibrated on Jev's output (nothing in this stage fits anything).
+056f066a66ded1502cd95baf7370d4c1ff8603cb178735cfe45accac12770923  database/p9_join.py
+8b47cb7bba69866814e185adcf64e96febbaa76f335e0b7ff23f8ec778683c8d  database/p9_run.sh
+f62a1f37530c1b83cd2e390d59ca09fbe3a17f9425f4ecc48ec2604d6111cbb7  tests/test_p9.py
+c3ec08a1b7f96a0c9e0ead3db8c294f96200a870cbe395c9fa6be1d24b7b31ff  database/p1_movie.py
+03f7ae5a4574f5d3c9f8ec34a60b21fea3fd0b81ff51ba4f0dcee1f574b24b89  src/jevsql/engine.py
+2fa07f7b7ce690dcd03d33362b480e4c350f287c341a89bfe00187f799126095  src/jevsql/open_models.py
+df231cfb189c9e169aa6afe415e4fa24533b04499179bbd61416c4c6af28ca21  database/data/sembench/files/movie/data/sf_2000/Reviews.csv
+
+2026-10-13T11:43:48Z  execution record, verdicts, and what was added after the results were seen
+
+Execution. One run of database/p9_run.sh, 2026-10-13T10:58:14Z to 11:37:59Z (40 min), not interrupted, no deviation from the rules above.
+23 steps, all complete, no request without an answer (Jev 23,852 requests in 9 min; Kev-4B 2,414 requests in 31 min). Jev spending:
+$1.004 for the collection, $0.066 before the timestamp at the top (a probe of request sizes and two rehearsals on made-up reviews; the
+second after giving every step its own cache namespace, because short blocks are identical requests at different k and would otherwise
+have been answered from the cache), $0.235 for the post hoc requests below.
+
+Control. Today's pair answers against the stage-1 answers: 98.62% ("same") and 98.63% ("opposite") agreement, above the 97% bar. Kev-4B's
+672 re-asked pairs against its stage-7 answers: 100%.
+
+Verdicts (out/database/p9/report.txt): no block size holds on either backend. The stage-8 result does not carry over to this predicate.
+- jev, "opposite": L1 fails at every k (F1 65.3-65.5% against 73.3% for the pair form; k = 10: -8.0 points, interval -12.1 to -4.2;
+  recall falls from 65.8% to 52.7%). L2 is met (tokens 33% / 27% / 26%, time 11% / 4% / 2% at k = 10 / 40 / 127). L3 is not met
+  (agreement between orders 98.43-98.62%).
+- jev, "same": L1 met (+1.1 points at k = 10, interval -0.9 to +3.1), L2 met, L3 not met (98.13-98.34%).
+- kev-4b, "opposite", k = 10: L1 fails (38.0% against 53.0%; -15.0, interval -20.7 to -9.6), L2 fails (tokens 71%, time 65%), L3 met (99.98%).
+- SemBench's own evaluator gives Q7 the same F1 as computed here (pair 0.733; Q 0.653-0.655).
+
+A note on L3 that the post hoc figures below make necessary. Its 99.0% bar was taken from Jev's agreement with itself on earlier tasks
+(99.45-99.8%). On these two questions Jev agrees with itself less: the same pair request asked three times on 2026-10-07 agrees
+98.72-98.78%, today against 2026-10-07 98.6%, the same Q request asked twice today 98.14% ("same") and 98.73% ("opposite"). The agreement
+between orders (98.13-98.68%) is at that level. So L3 is not met as written, but the bar was above what the same request achieves against
+itself here, and the failure is not evidence of an order effect. The verdicts stand on L1.
+
+Post hoc (database/p9_posthoc.py, out/database/p9/posthoc.txt; added after the results were seen, none of it changes a verdict)
+- Two extra collections on Jev: Q at k = 10 in random order asked a second time, both questions (the self-agreement above); Q with one
+  partner per request (k = 1) for "opposite" on all pairs.
+- Q at k = 1 gives F1 65.5% (pair 73.3%, Q at k = 10 65.3%); it agrees with Q at k = 10 on 98.67% of pairs and with the pair form on 87.75%.
+  So the loss does not come from putting many questions in a request, nor from their order: it comes from moving the second review out of
+  the state into the question. At k = 1 that form saves nothing (101% of the tokens and of the time).
+- Direction: with the second review in the question Jev says "opposite" less often (30.8% of pairs against 39.9%; truth 50.3%) and its
+  answers follow the two reviews' own sentiments less (77.0% agreement with the rewritten plan against 87.5%). "same" hardly moves.
+b53011ac9d55b0ebc4d17148d3c75f52cacbae3bb0d8e216ddd13e1e204e9ebf  database/p9_posthoc.py
+056f066a66ded1502cd95baf7370d4c1ff8603cb178735cfe45accac12770923  database/p9_join.py

@@ -1,0 +1,6 @@
+2026-10-07T03:51:52Z  selection rule fixed before any candidate was run
+23ca1dfe10c2d5860511dcad8155ab9d80366691e0aa8d456293543564d8a0f9  exp/p0_qualify.py
+6948ea6a5f612a5a84c35e9543d281905c724986e305668de50f53d2e9360316  src/jevsql/routes.py
+377d3cf643a6405fcd7a55f23a1fea129c10fed37f1be88659ae3c2254ba44d4  src/jevsql/openrouter.py
+2026-10-07T04:17:35Z  deviation: max_tokens for thinking routes raised 2000 -> 8000 after truncated (empty) answers were seen; failed rows re-asked; selection rule unchanged
+9a0951817d6a4da6b5131f72b7dc96af274aeac07a75152bb5282817255bf915  src/jevsql/routes.py

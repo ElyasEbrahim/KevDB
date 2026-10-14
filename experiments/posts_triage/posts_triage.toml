@@ -1,0 +1,62 @@
+# The first real task: clean and label the 982 X posts of jev-hub.
+# The dataset's own tags come from keyword matching and are very noisy; here Jev judges every post again.
+#
+# Guidelines for writing questions (from the official jaggedness notes):
+#   - write instructions in English with exact conditions, and put edge cases into criteria
+#   - one question judges one thing; counting, comparing numbers and date arithmetic belong in code
+#   - accuracy on CJK text is currently below English, so Chinese and Japanese rows are more likely to land in the review queue
+
+name = "posts_triage"
+input = "experiments/posts_triage/sample_posts.jsonl"
+# Full dataset: kevdb run experiments/posts_triage/posts_triage.toml --input experiments/posts_triage/data/posts.json --records-path items
+id_field = "id"
+state_fields = ["text", "lang", "video"]
+# Real runs use the official Jev API (TYPESAFE_API_KEY in .env), with the model pinned to the patch version.
+# The third-party platform OpenCode is only for comparison: it rate-limits, and a single request takes twice as long.
+provider = "typesafe"
+model = "jev-1.13.0"
+concurrency = 16
+
+[questions.content_type]
+type = "choice"
+instructions = "What kind of post is `text`? Pick the single best fit."
+# Gold set: rows with confidence >= 0.6 are 77% of all rows, at 95% accuracy; rows below 0.6 reach only 65%
+review_below = 0.6
+
+[questions.content_type.criteria]
+demo = "The author shows something they built or ran with Jev: a project, a screen recording, a concrete result."
+tutorial = "Step-by-step instructions for getting access to, installing, or calling Jev."
+# v2: v1 only said "comparison with numbers", so posts repeating the official speed/price figures were labelled benchmark
+benchmark = "The author reports their own measurement comparing Jev against another model or tool, with numbers. Repeating figures published by TypeSafe or by someone else does not count."
+explainer = "Explains what Jev is or how it works, without the author's own project or measurements. Includes posts that repeat TypeSafe's published speed and price figures."
+announcement = "Official or third-party news: a launch, an integration, availability, an event."
+opinion = "Commentary, criticism, speculation, or a question, with no project and no instructions."
+promo = "Mainly advertises the author's own paid service, course, token, or unofficial reseller site."
+other = "Too short or too vague to classify, or not really about Jev."
+
+[questions.substance]
+type = "score"
+instructions = "How much concrete, reusable information does `text` contain for someone who wants to build with Jev?"
+# No review: on the gold set 99% of rows are within one level of the human label, good enough as a ranking signal
+criteria = [
+  "None: pure reaction, hype, or a bare link.",
+  "Low: names a use case or claim but gives no specifics.",
+  "Medium: describes what was done and roughly how, or gives one concrete number.",
+  "High: specific setup, numbers, and enough detail to reproduce or evaluate the claim.",
+]
+
+[questions.first_hand]
+type = "noul"
+instructions = "Does the author of `text` describe something they personally built, ran, or measured with Jev, as opposed to relaying someone else's work?"
+# Gold set: at 0.6, 94% of rows pass automatically at 96% accuracy; 0.7 gains one point but sends 11% more rows to review
+review_below = 0.6
+
+# v2: v1 labelled any post with a negative tone as yes (35% precision on the gold set),
+# so the criteria now state that the target of the criticism must be Jev itself.
+[questions.critical]
+type = "noul"
+instructions = "Is the author of `text` skeptical or critical of Jev itself, or do they report a limitation or failure of Jev itself?"
+
+[questions.critical.criteria]
+true = "The author doubts or criticizes the Jev model or TypeSafe's claims about it, or reports something Jev did badly or cannot do."
+false = "The author is positive or neutral about Jev. Also false when the criticism is aimed at something other than Jev: another product, other people's usage or opinions, or hype in general. Stating that Jev does not generate text is not criticism."

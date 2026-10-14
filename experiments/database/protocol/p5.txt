@@ -1,0 +1,29 @@
+2026-10-07T07:16:25Z  written before any call to the stronger model in this follow-up (a 36-request price probe was run earlier; its answers were not looked at)
+
+Follow-up: why did the Jev -> LLM cascade fail on the movie and restaurant data? Budget: the whole remaining OpenRouter balance ($11.24).
+Upper tier: Opus 5.5, default (adaptive) thinking, pinned to Anthropic - the model that served as the reference on product matching.
+
+Collected, in this order (exp/p5_strong.py):
+1. movie: 1,850 review texts (the first 1,850 of the 5,000 texts every other source already judged), question "positive".
+2. em (positive control): Walmart-Amazon test set, all 214 pairs where Jev's probability is in (0.1, 0.9) plus 100 + 150 sampled confident pairs.
+3. mams: 21 questions packed per sentence, in the fixed order of the 1,000-sentence sample, as many sentences as the remaining money buys.
+
+Questions and readings fixed now
+Q1 (is the stronger model actually better here?): accuracy against the human labels, Opus vs Jev, paired on the same rows.
+   movie: all sampled rows. mams: average over the 21 predicates. "Better" = at least 2 points higher (the bar used in stage 4).
+Q2 (if better, can Jev's probabilities find the rows worth escalating?): escalate the 30% of rows Jev is least sure about
+   (movie: smallest |p - 0.5|; mams: largest sum of p(1-p) over the 21 predicates, as in exp/p4_cascade.py). The cascade passes if it
+   recovers at least 60% of the Jev -> Opus accuracy gap. A bootstrap over rows (2,000 resamples) gives the 95% interval.
+Q3 (positive control): on Walmart-Amazon, replacing Jev's answer by Opus's on the 214 unsure pairs (10.4% of pairs) must raise F1 on the
+   full 2,049-pair test set, with a bootstrap 95% interval for the F1 difference that excludes 0.
+Interpretation table
+   Q1 no  on a dataset -> no model we tried beats Jev against these labels: the labels cap everything and a cascade has nothing to gain.
+   Q1 yes, Q2 fail     -> the upper tier is not the problem; Jev's probabilities do not say where it is wrong on this kind of predicate.
+   Q1 yes, Q2 pass     -> the earlier failure was the weak upper tier.
+Free companion analysis (no model calls, any upper tier): for every dataset with human labels and Jev probabilities (4 matching test
+   sets, 2 end-to-end matching sets, movie, the 21 restaurant predicates) the share of Jev's errors that lie in its least-sure 10/20/30/50%
+   of rows. This is the most any cascade could recover with a perfect upper tier.
+16dfcc3594ba77513f8e82cf2359f1d361d0dfeabcc92083698aa1b06e48b57b  exp/p5_strong.py
+2d45ac796e115d5c9ab4fdfc263eab7f2b148e5d28fd0fb633ca6aec7f9cdbb1  src/jevsql/routes.py
+004fcfe20e3845cd095774a83980b6ba3d931997dbd36ef348be5b5691d97655  src/jevsql/openrouter.py
+2026-10-07T07:37:16Z  note: the first collection run was stopped during part 3 - OpenRouter rejected concurrent requests because it reserves the full max_tokens (8000) per in-flight request against a fraction of the balance. Restarted with max_tokens 2000 for the packed requests and adaptive concurrency; parts 1 and 2 are replayed from cache. No answers had been analysed.

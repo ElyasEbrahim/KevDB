@@ -1,0 +1,14 @@
+# Exact versions used for the database experiments (2026-10-07, Python 3.14). Normally installing the experiments extra from pyproject is enough:
+#   pip install -e ".[dev,database]"
+# use this file only for an exact reproduction: with a different pandas version, SemBench's sampling script picks different rows.
+duckdb==1.5.6
+pyarrow==25.0.1   # DuckDB's vectorised Python functions receive data in Arrow batches
+numpy==2.5.3
+httpx==0.28.1
+pytest==9.1.1
+# Needed by SemBench's bundled data generation and scoring code. The scoring code also imports cdlib (clustering metrics, with 50 dependencies),
+# which the movie scenario never uses; a stub module stands in for it at call time instead of installing it.
+pandas==3.0.6
+scipy==1.18.1
+scikit-learn==1.9.1
+matplotlib==3.11.2

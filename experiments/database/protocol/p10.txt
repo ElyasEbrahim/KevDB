@@ -1,0 +1,137 @@
+2026-10-13T13:18:11Z  written before any real training pair was given to any model, and before any fine-tuned checkpoint was asked about any evaluation row. Status: a standard waiting for the user's go-ahead, not yet a frozen run. The data builder, the training wrapper and the fetch script exist and were rehearsed on made-up rows (checksums at the end); the evaluation and analysis scripts are not written yet. Before the run starts a dated block is appended here with their checksums and the result of a full rehearsal; from then on nothing above that block changes.
+
+Stage 10: does fine-tuning Kev on public, human-labelled record-matching pairs bring it to Jev's zero-shot level on matching data it was not trained on?
+
+Why this stage. Stages 6 and 7 found that the open decision models cannot replace Jev as they ship, and that the gap is largest on record
+matching. On the Walmart-Amazon test set Kev-4B called 104 non-matching pairs a match (Jev: 18). Recalibrating with 200 human labels closed
+most of that gap in stage 6, but on new matching data in stage 7 two datasets stayed below Jev for each model after calibration (Kev-4B:
+AUC 0.937 against 0.961 on Amazon-Google, recall 64% on DBLP-ACM), so part of the gap is ranking, which calibration cannot change. A
+possible cause, not tested so far: no stage of Kev's training contains record pairs. Its base set decision-v7 is 10,000 records from ten
+public classification datasets (Banking77, BoolQ, AG News, MultiNLI, SST-5, Yelp, TREC, DBpedia-14, Amazon reviews, IMDb) plus generated
+policy and rule examples; the later stages add dates and missing evidence, consumer-finance complaints, generated skill data and developer
+tooling (open_models/kev/README.md "Training"; docs/model-cards/kev-4b.md and kev-0.8b.md "Training data", read 2026-10-13). Kev ships its
+training code and a documented way to continue from a released checkpoint, and its author reports +10 points of accuracy from 5,219
+labelled in-domain records and nothing measurable from 400 (README, "Fine-Tune on Your Own Data"). Those gains are in-distribution. The
+question here is the one Jev's zero-shot numbers pose: after seeing matching pairs from other sources, is Kev as good as Jev on a
+matching dataset it has never seen?
+
+What was known when this was written
+- Zero-shot on the four full Magellan test sets (stage 7 part C; accuracy / AUC / Brier / F1 at p >= 0.5, same first-draft questions):
+    Jev             abt-buy 98.0% / 0.996 / 0.014 / 0.910   amazon-google 92.1% / 0.961 / 0.057 / 0.695   dblp-acm 99.0% / 0.999 / 0.009 / 0.973   walmart-amazon 97.9% / 0.987 / 0.019 / 0.884
+    Kev-4B v1.0     abt-buy 96.2% / 0.993 / 0.034 / 0.844   amazon-google 85.2% / 0.937 / 0.117 / 0.557   dblp-acm 92.0% / 0.985 / 0.045 / 0.742   walmart-amazon 93.9% / 0.981 / 0.054 / 0.733
+    Kev-0.8B v1.0   abt-buy 70.3% / 0.974 / 0.202 / 0.418   amazon-google 66.9% / 0.923 / 0.216 / 0.373   dblp-acm 85.7% / 0.995 / 0.150 / 0.716   walmart-amazon 66.0% / 0.960 / 0.219 / 0.350
+  By the stage-6 rule Kev-4B is on par with Jev on abt-buy only, Kev-0.8B on none.
+- The training splits (fetched 2026-10-13, counted, never shown to a model). Pairs / matches: abt-buy 5,743 / 616 (10.7%), amazon-google
+  6,874 / 699 (10.2%), walmart-amazon 6,144 / 576 (9.4%), dblp-acm 7,417 / 1,332 (18.0%). They are the 3:1:1 random splits of blocked,
+  labelled candidate pairs made for DeepMatcher (anhaidgroup/deepmatcher Datasets.md) in the serialization of the Ditto repository
+  (megagonlabs/ditto, Apache-2.0, data/er_magellan unchanged since 2020-09-20). Because the split is over pairs, a dataset's test set
+  shares records with its own training split: in 56% (walmart-amazon) to 93% (abt-buy) of test pairs both records also occur in training
+  pairs, and 1 to 110 test pairs are identical to a training pair. Between different datasets no record is shared verbatim. So a model
+  trained on a dataset's own training split is not tested on unseen records; a model trained on the other three datasets is.
+  The longest state among all 26,178 training pairs is 311 tokens (Kev's tokenizer), inside the trainer's default limit of 384.
+- A feasibility rehearsal on made-up pairs only (2026-10-13; invented products and papers, in no dataset; out/database/p10_rehearsal).
+  The released recipe trains on this Mac (M3 Max, 64 GB, PyTorch MPS, full precision): Kev-0.8B 0.8-1.0 s per record and under 9 GB,
+  Kev-4B 2.4-2.5 s per record and 26 GB, both with gradient checkpointing; without it Kev-4B passed 80 GB and was stopped. A checkpoint
+  trained this way loads in the serving path used in stages 6-8 and answers; it carries temperature 1.0, not its parent's. On 24 made-up
+  pairs the answers changed in the expected direction. None of this says anything about real pairs.
+
+Models
+- Kev-4B and Kev-0.8B, each started from its released checkpoint (code kev-1.0, weights jaredpalmer/kev-4b@v1.0 = 6cfce5c2,
+  jaredpalmer/kev-0.8b@v1.0 = bf75a6a8; bases Qwen/Qwen3.5-4B-Base@1001bb4d, Qwen/Qwen3.5-0.8B-Base@dc7cdfe2). The two models are run and
+  judged separately with the same data, settings, analysis and lines; the user may start them at different times.
+- Jev (jev-1.13.0) appears only as the comparison column, from the answers cached on 2026-10-05. No Jev output is used to train,
+  fine-tune, calibrate or pick a threshold for any open model (TypeSafe customer agreement 2.3(b)); every label is a human label of the
+  benchmark.
+
+Training data (database/p10_data.py)
+- A training record is the request the evaluation sends - state {record_a, record_b}, the first-draft question of entity_match/run.py
+  with its criteria, unchanged - plus the human label. Products and publications keep their own question.
+- Per dataset: the first 2,000 pairs of its training split in the order of sha256("p10|<dataset>|<pair id>"). Matches and non-matches
+  stay in their natural proportion; nothing is resampled, augmented or rewritten. The validation and test splits are never trained on.
+- Arms, per model:
+    loo-<D> (four arms, the test of this stage): trained on the other three datasets (6,000 pairs), evaluated on D.
+    all (one arm, a reference): trained on all four (8,000 pairs), evaluated on all four.
+    released: the v1.0 checkpoint as it ships, from stage 7's stored answers.
+
+Training (database/p10_train.sh; one run per arm, no search)
+- kev.train continued from the released checkpoint (--init_from), LoRA rank 16 and head as released, learning rate 2e-5, one epoch,
+  effective batch 8 (1 x 8 accumulation), --p_none_pair 0.25, 2,000 replayed records of decision-v7's training part (--replay; the
+  author's device against forgetting), seed 1, full-precision weights, PyTorch MPS. These are the settings of the last fine-tuning stage
+  of the released checkpoints (their head.pt) and of the README's advice; none was tuned for this stage and none will be.
+- One checkpoint per run, the final one. No validation-based selection, no early stopping, no second seed. A run that drops any record
+  for length, or ends with a non-finite loss, does not count.
+
+Temperature
+- A fine-tuned checkpoint ships with temperature 1.0. Following the author's recipe, one temperature per checkpoint is fitted by maximum
+  likelihood on human labels held out from training: the 200 validation pairs per dataset that stage 7 used (the first 200 of its label
+  pool), taken from the arm's training datasets only (600 pairs for a loo arm, 800 for all). No label of the held-out dataset is used.
+  p_T = sigmoid(logit(p_1) / T). T changes Brier and calibration, never accuracy at 0.5, AUC or F1. Raw (T = 1) numbers are reported too.
+
+Evaluation
+- Each checkpoint is served exactly as in stages 6-8 (kev.serve, MLX, bfloat16, sandboxed, concurrency 16) and asked the full test sets
+  with the unchanged questions. A decision is p >= 0.5. No threshold is tuned.
+
+Lines (per model)
+- T, transfer - the line of this stage. For a held-out dataset D, the loo-D checkpoint with its fitted temperature is "on par with Jev"
+  on D's full test set by the stage-6 rule: accuracy not more than 2.0 points below Jev's, AUC not more than 0.02 below, Brier not more
+  than 0.02 above. Point estimates decide; a bootstrap over test pairs (2,000 resamples, paired with Jev's answers on the same pairs)
+  gives 95% intervals, and an interval that contains a line is reported as not separable from it.
+  "Fine-tuning brings the model to Jev's zero-shot level on matching" = on par on all four held-out datasets. Anything less is reported
+  as the count out of four, naming the legs that failed.
+- G, guard against forgetting, for every fine-tuned checkpoint: accuracy at most 2.0 points below the released checkpoint on each of
+    g1  the first 1,000 review texts of stage 6 (question "positive?", human labels);
+    g2  the first 100 restaurant sentences of stage 6 x 21 predicates, one question per request (mean over the 2,100 judgments);
+    g3  the development split of decision-v7 (1,204 records, 1,468 questions; choice: the answered option, noul: p >= 0.5,
+        score: the most probable level).
+  A checkpoint that meets T and fails G is reported as "reaches Jev on matching but forgets", and does not count toward the verdict.
+- The verdict for a model: T on all four datasets with G met by those four checkpoints.
+
+Reported next to the lines, with no line of their own
+- Improvement over the released checkpoint for every loo arm: differences in accuracy, AUC, Brier and F1 on D with paired bootstrap
+  intervals. An arm "improves" if the interval of the F1 difference lies above zero. This is what the stage says if T is missed.
+- Same question against new question: the three product folds share their question with two training datasets; the dblp-acm fold is
+  trained on products only and is asked the publication question for the first time. The two are reported apart.
+- Where the errors went: false matches and missed matches, mean probability on non-matching pairs, share of pairs with 0.1 < p < 0.9,
+  equal-mass calibration error, share of errors among the 30% least confident pairs (is a cascade still possible).
+- The all arm on the four test sets, next to Jev and to the F1 that Ditto reports with the full training split of each dataset (Li et
+  al., arXiv 2004.00584, Table 5: Abt-Buy 89.33, Walmart-Amazon 86.76, Amazon-Google 75.58, DBLP-ACM 98.99; average of 5 runs, best
+  validation checkpoint). Not a like-for-like comparison: Ditto trains one model per dataset on 5,743-7,417 pairs; this arm trains one
+  model on 2,000 pairs of each. Both are tested on records they have largely seen in training (see above).
+- End to end on the raw tables of stage 8 (pair form, the stored top-10 candidates, the stage-8 subsets of 400 left records): abt-buy
+  with the loo-abt-buy checkpoint and dblp-scholar with the loo-dblp-acm checkpoint (neither has seen a record of those sources),
+  against the released checkpoint (Kev-4B: stage 8's answers; Kev-0.8B: asked now) and Jev on the same subsets; on abt-buy also with at
+  most one match kept per left record.
+- Option order: the single-choice form of stage 8 on the first 100 left records of the abt-buy subset in three orders, loo-abt-buy
+  against released. Training here contains yes/no pairs only, so no change is expected; the reading is the baseline for a later stage
+  that would train order invariance.
+
+What I expect (written now, so that it can be wrong)
+- Kev-4B: improvement on all four folds; T met on abt-buy and walmart-amazon, open on amazon-google (the hardest set; Jev's own F1 is
+  0.695) and on dblp-acm (a question it has not been trained on). Kev-0.8B: large improvements, T met on at most two.
+- G is met everywhere: the recipe replays the base set, and the author reports no loss on Kev's own evaluation with --init_from.
+
+Rules of collection
+- One command per model. Order: fetch and check data, build the training files, then for each arm train, serve, ask, stop the server;
+  then the analysis. A finished step is not repeated. Failed requests are re-asked in up to 4 passes; what still has no answer counts as
+  a wrong decision and as p = 0.5, and is reported. A dataset with more than 5% of requests unanswered is judged "below".
+- A training run that crashes is started again from the beginning once (adapter runs have no resume point); a second failure leaves
+  that arm missing, and the model's verdict is then "incomplete".
+- Until every arm of a model is collected, only counts, timings, memory and the trainer's own loss line are looked at; no answer is
+  examined, and no question, data selection, setting, temperature rule or line is changed. Anything added afterwards is marked post hoc.
+- No paid interface is called. Training and serving run sandboxed without network access; everything stays inside open_models/ and out/.
+
+Open before the run (the user's decisions; whatever is chosen is appended here with its date before any real pair is used)
+- Where Kev-4B is trained. On this Mac the five training runs take about 26 hours (Kev-0.8B: about 10), estimated from the rehearsal. The same runs on a rented H100 would take
+  minutes each, but that is a paid service and changes the training precision to the released recipe's bf16 autocast.
+- 2,000 pairs per dataset is my choice between the author's two data points (400: nothing; 5,219: clear gain) and the time available on
+  this machine. Fewer pairs make a miss harder to read; more pairs cost proportionally more hours.
+b5a154fb7f08cc5feca19b93e1f38745f26488c184a7f20c650fbe414bc6bed0  database/p10_data.py
+adfc863c1a77009b5f3f2e1f7118c0fde6e4527c4bb69ca403ca03e81625df20  database/p10_train.sh
+de59e6f23aec13a766ac35c2050892562ec5373e437bf3fcd79b5b013e02f61e  database/p10_fetch.sh
+3f7423b6190afdcdd6f95d096bfe5eac75a6d5ead46d94773a9b210a3908746b  tests/test_p10.py
+7e8033ad9a29a76929075b1ccb46decc6feed92a9af9cb9167fd73b879d1f8fb  entity_match/run.py
+c1370966c08c246e9cf844b7cd2cf580b2559e9831f1eb3cca560fd53c1bcbb2  entity_match/data/abt-buy/train.txt
+84ef5f7747296990a3775d2c8774949e720df643106b1b447682265f41929b26  entity_match/data/amazon-google/train.txt
+092fccd11c1cc1ffe54a702af276641218ce9506e6d60fb5a29a3c67d87892c3  entity_match/data/walmart-amazon/train.txt
+4f757d2d5dae4f7d7d118b796c683a232b4e11bf000e2012b64f8af95a981a4e  entity_match/data/dblp-acm/train.txt
+7ed5254b5cb5291baefaceb09edf7e13110258211518c8038f4a12c11bd628ad  open_models/kev/evals/v7/decision-v7/train.jsonl

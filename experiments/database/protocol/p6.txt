@@ -1,0 +1,287 @@
+2026-10-09T13:05:00Z  written before any judgment from an open Jev-compatible model was collected, and before the analysis script was run on anything
+
+Stage 6: can an open Jev-compatible model replace Jev as the default backend?
+
+What was known when this was written
+- From earlier stages: Jev's and DeepSeek V4.1 Flash's accuracy and AUC on the movie and restaurant data, Jev's accuracy and error
+  concentration on Walmart-Amazon. Their Brier scores and calibration errors on these rows had not been computed.
+- From the projects' own pages (read 2026-10-09): Kev, Clef and Laya's self-reported figures. No request has been sent to any of them.
+
+Backends under test, with the versions verified on 2026-10-09 (database/p6_collect.py, src/jevsql/open_models.py)
+- kev-4b   jaredpalmer/kev-4b at Hub tag v1.0, served on this machine (Apple M3 Max, 64 GB) by Kev's own server; probabilities as
+           served, i.e. with the temperature the checkpoint ships with.
+- clef     @cf/cloudflare/clef on Cloudflare Workers AI. The service offers no version pin; collection dates are recorded.
+- laya     convaiinnovations/laya (the English zero-shot checkpoint), package laya 0.4.1, served on this machine by laya-serve.
+- Only if the user approves them before collection starts: clef-flash (@cf/cloudflare/clef-flash) and kev-9b (jaredpalmer/kev-9b at
+  tag v1.0). Same data, same analysis, same rule.
+- The commit each tag or default branch resolves to is recorded when the weights are downloaded.
+References, replayed from the cache with no new calls: jev-1.13.0 (official API), and the output-token probability of DeepSeek V4.1
+Flash with thinking off (movie and restaurant data only; where the token probability is missing its hard answer, 0 or 1, is used).
+
+Data and questions (nothing new is written or edited; every backend gets the same state and question payload Jev answered)
+- movie  the 5,000 review texts that every open-model source judged in stage 2 (5,001 labelled rows), question "positive",
+         truth scoreSentiment = POSITIVE.
+- mams   the fixed 1,000 sentences of stage 4, 21 predicates, one question per request. Truth as in stage 4.
+- em     the Walmart-Amazon test set, all 2,049 pairs, the product question of entity_match/run.py. Truth: the benchmark label.
+A decision is p >= 0.5 for every source. No threshold, prompt or temperature is tuned for any backend.
+
+Collection
+- New cache namespace "p6:", so every run is cold. Failed requests are re-asked in up to 4 passes. A request still without a usable
+  answer counts as wrong in accuracy and as p = 0.5 everywhere else, and the number of such requests is reported.
+- Concurrency per backend is set by a speed probe on 200 movie texts outside the 5,000 (concurrency 1, 4, 16; the fastest is used).
+  The probe's answers are not examined.
+- Hosted backends: before the main run, 20 requests of each kind (movie, restaurant single, restaurant packed, pair) are sent to
+  read the billed tokens per request (answers not examined). If the projected total for the approved hosted backends exceeds the
+  amount the user approved, stop and report.
+
+Metrics, per backend and dataset (restaurant data: per predicate, then averaged over the 21)
+- accuracy against the human labels; AUC; Brier score = mean (p - y)^2;
+- expected calibration error with 10 equal-width bins (the function used in stage 3) and with 10 equal-mass bins;
+- the reliability table itself with the number of rows per bin, and for the middle band 0.1 <= p <= 0.9: number and share of rows,
+  mean p against the share of positives, accuracy. A calibration figure is not to be read off the top bin alone;
+- error concentration: the share of the backend's own errors that lie in its own least-sure 10 / 20 / 30 / 50% of rows (smallest |p - 0.5|);
+- batch throughput: rows per second of the cold main run (wall clock, retries included); cost per 1,000 rows (list price times the
+  input tokens the service reports; local backends are reported as free, hardware and electricity not counted);
+- requests without an answer.
+
+Primary analysis and rule
+A backend matches Jev on a dataset if, paired on the same rows,
+  (A) accuracy     >= Jev's - 2.0 points   (the bar used throughout stages 4 and 5),
+  (B) AUC          >= Jev's - 0.02,
+  (C) Brier score  <= Jev's + 0.02.
+A backend "can replace Jev as the default backend" only if A, B and C all hold on all three datasets. Point estimates decide.
+A bootstrap over rows (2,000 resamples; rows are reviews, sentences, pairs) gives a 95% interval for each difference; a result whose
+interval contains the bar is reported as decided on the point estimate but not separable from the bar.
+A backend that leaves more than 5% of a dataset's requests without an answer fails on that dataset as served; nothing is patched for it.
+
+Calibration reading (the independent check; not a further condition beyond C)
+  "as well calibrated as Jev" on a dataset = equal-mass calibration error <= Jev's + 0.02 on the same rows.
+
+Practicality reading (reported next to the rule, not part of it)
+- A local backend is practical for batch work on this machine if its rows per second are at least 10% of Jev's on the same dataset.
+  Jev's reference figures are its earlier cold runs at concurrency 16: movie 52 rows/s, restaurant single 53 requests/s,
+  Walmart-Amazon 38 pairs/s.
+- Clef's speed and cost are those of Cloudflare's hosted service. Self-hosting its 27B weights is not tested.
+- Requests go through the plain one-state-per-request endpoint, like Jev's. Batch endpoints are not used.
+
+Secondary, reported as such
+- Restaurant data with all 21 questions in one request: accuracy, agreement with the backend's own single-question decisions, throughput.
+- Recalibration with human labels only: a + b * logit(p) fitted on 200 randomly drawn labelled rows, scored on the remaining rows,
+  200 draws, for every source including Jev (restaurant data: one a, b for all 21 predicates, fitted on 200 sentences).
+- Rows over a backend's validated window (kev-4b 8,192 tokens, laya 512, clef 65,536), identified from the token counts the backend
+  reports; they are not dropped, and a second table is restricted to rows that fit. By character counts no row is expected to exceed any window.
+- The same rule A-C applied to the DeepSeek token probabilities on the two datasets where they exist.
+
+Constraint
+No Jev output is used to train, fine-tune, calibrate or pick a threshold for any open model. Jev appears only as the comparison column.
+Jev's cached judgments stay on this machine and out of the repository.
+
+2026-10-09T13:12:26Z  scripts frozen; still no request sent to any open model. The analysis script has been run on the cached Jev and DeepSeek judgments only (out/database/p6/report.txt)
+43ef758508f2725bed9862ea840560880e1a19606098848d6d7013faf4490222  database/p6_collect.py
+b7745476e09b81121e7050146568278a9d35a5db66b88045d73d49edeb6840cb  database/p6_report.py
+997bb8805601961a091c3bc93fa7522acf310691df09d759a15e51b45eab57c8  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+
+2026-10-10T11:05:06Z  environment set up; still no request about any evaluation row has been sent to any open model
+
+User decisions (2026-10-09): kev-9b is approved and will be collected. Clef and clef-flash are not approved; they stay out unless
+the user approves them before collection starts. Collection starts only on the user's instruction.
+
+Environment (database/open_models.sh; everything lives under open_models/ inside the repository, nothing is installed system-wide)
+- Kev code at release tag kev-1.0 (commit 6b719c3c), dependencies from its own uv.lock: Python 3.13.16, mlx 0.32.2, mlx-lm 0.31.3,
+  torch 2.8.0, transformers 5.17.0. Backend MLX on the M3 Max, bfloat16.
+- kev-4b  jaredpalmer/kev-4b@v1.0 = commit 6cfce5c2, base Qwen/Qwen3.5-4B-Base@1001bb4d, shipped temperature 2.406.
+- kev-9b  jaredpalmer/kev-9b@v1.0 = commit db029f08, base Qwen/Qwen3.5-9B-Base@68c46c4b, shipped temperature 2.194.
+- laya    laya[serve] 0.4.1, dependencies pinned in database/requirements.laya.txt (torch 2.14.1, transformers 5.19.0),
+          convaiinnovations/laya at commit 7b928d82 (the English checkpoint), device MPS.
+- Servers are started with HF_HUB_OFFLINE=1, so the weights cannot change under a run.
+- Four shards of the 9B base were finished with curl after an interrupted download; each was checked against its SHA-256 before use.
+
+Smoke test: each of the three servers answered one made-up support message that is in no dataset ("Help! My payouts have been
+failing for 3 days."), to confirm that the server and the client work. Nothing else has been sent.
+
+Changes to the frozen files since 2026-10-09T13:12:26Z; neither touches what is asked or how it is analysed
+- src/jevsql/open_models.py: Laya's address moved from port 8000 to 8011 (8000 is a common development-server port); comments.
+- database/p6_collect.py: the usage text now points at database/open_models.sh for installing and starting the local servers.
+1e32d9980d1729154bc92598ce5f5486c43d94f8278eaf75555542f4fa7c80db  database/p6_collect.py
+b7745476e09b81121e7050146568278a9d35a5db66b88045d73d49edeb6840cb  database/p6_report.py
+1c341b071c02f4e3e2c34c287329d6e8f2c08a267f93f6b988503b2ee06e09ef  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+df699766e85355c97f19a6b97a616d23e44856935d6849d3fac4aaf5e0b6147f  database/open_models.sh
+ae9603472467115dcd82feedd78e18d42deba82081fd5562b5c6a512ece5e5d7  database/requirements.laya.txt
+
+2026-10-10T11:27:17Z  environment check before collection; still no request about any evaluation row has been sent to any open model
+
+- The model servers now run inside a macOS sandbox that denies every outbound network connection except loopback
+  (database/open_models.sh). Checked: a connection to the outside made from inside the sandbox fails, and all three servers
+  answer inside it. The first smoke tests on 2026-10-09 were run before the sandbox was added.
+- Check with made-up rows (invented reviews, restaurant sentences and product pairs; the questions are the real ones): each backend
+  answered all four request shapes without a failure. The speeds seen there are used only to plan the run; the probe described
+  above is still to be run.
+- Seen in that check and stated in Laya's own README ("A noul with no criteria ... On laya that pair carries the whole decision, so
+  it answers 'no' whatever the state"): the English Laya checkpoint returned exactly 0 for the movie question on every invented
+  review. The movie and restaurant questions carry no criteria, as in the payload Jev answered, so Laya is expected to fail on
+  them. Nothing is changed for it: same payloads, same rule.
+- Change to the frozen files, affecting only the secondary window analysis: the "truncated" flag a server reports is now kept
+  (src/jevsql/open_models.py, database/p6_collect.py) and used by the window check (database/p6_report.py). Laya gives every
+  question its own window and reports token counts summed over the questions of a request, so its token count cannot be compared
+  with its 512-token window; its own flag is used instead. The metrics, the rule and the reference figures are unchanged
+  (out/database/p6/report.txt regenerated from the cached Jev and DeepSeek judgments, same numbers).
+8ee953c591c1b3a095883f17be5c16b3adf9869fd28dc3f03521752f2b2253ea  database/p6_collect.py
+7713ccbe2258e62674869b1d830acea4e7cd799168b941096c7e49285fd1413f  database/p6_report.py
+5275479f6f2c8d81053d0979715845e6f73beffd5d07c0daaeb310ac16059701  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+59b793a8ca8d65d91816be809d212e2ece92282d4c983f3a4fae50653de6fc48  database/open_models.sh
+ae9603472467115dcd82feedd78e18d42deba82081fd5562b5c6a512ece5e5d7  database/requirements.laya.txt
+
+2026-10-10T12:54:43Z  amendment before collection; still no request about any evaluation row has been sent to any open model,
+and no evaluation row has been re-asked of Jev
+
+User decisions (2026-10-10)
+- Arms under test: kev-4b, kev-9b, laya, clef-flash. The hosted Clef arms are dropped (paid, not approved); Clef 27B cannot run on
+  this machine (54.97 GB of bfloat16 weights against a 48 GB recommended GPU working set). laya-multilingual is not included
+  unless the user approves it before the run starts; no arm is added after the start.
+- clef-flash is now run on this machine instead of on Workers AI: Cloudflare/clef-flash at commit 8b2e5fd1, loaded and scored with
+  the repository's own joint_schema_model.py (load_release_model and systemone); database/clef_server.py only adds the HTTP layer.
+  torch 2.11.0 and transformers 5.10.2 (the versions the model card names), PyTorch MPS backend, bfloat16 as released. The optional
+  "fast path" libraries are not installed, so transformers uses its plain torch implementation. Window used in the secondary
+  window analysis: 16,384 tokens, the default max_length of its systemone function.
+- A Jev control arm is added at the user's suggestion (jev.fresh): every request is asked of jev-1.13.0 again through the official
+  API and the same new collection code, about $0.43.
+    * The cached Jev judgments stay the primary reference; the rule A-C is applied against them, as fixed above.
+    * Gate, checked before any open model is asked: if the fresh and the cached Jev decisions agree on fewer than 97% of the movie
+      texts, stop (stage 3 measured 99.45% for a repeat). If the control arm cannot be collected (key, quota, network), the run
+      goes on without it and it is collected afterwards.
+    * Reported: the fresh-minus-cached differences (the run-to-run noise that other differences have to exceed), and for every arm
+      whether its verdict changes when the fresh Jev is the reference.
+- Added references and checks, none part of the rule: a no-skill line (every question answered with its share of positives), and
+  for every arm the first 200 movie texts asked a second time after all its other data (does it answer the same twice).
+
+Execution
+- One command, database/p6_run.sh, in the order: checks, Jev control, laya, kev-4b, kev-9b, clef-flash, counts, cache merge,
+  analysis. The handling of every anticipated failure is fixed in database/protocol/p6_plan.md (section 6); apart from the checks
+  before the start and the control gate, nothing stops the run. No answer is looked at before all collection is finished.
+
+Checks done for this amendment, all on made-up rows (P6_REHEARSAL=1), never on evaluation rows
+- Rehearsal of the whole command with all four local arms and the Jev control: all files complete, no failed request; every local
+  arm returned identical answers when asked the same rows twice. Jev was asked about 300 made-up requests per rehearsal ($0.004).
+- Failure drills: a server killed during collection was restarted and the run resumed from the cache; an arm whose server could
+  not start was retried once, skipped, and listed as missing by the count.
+- Speeds seen on made-up rows, used only to plan: requests per second for movie / restaurant single / packed / pairs:
+  kev-4b 8.7 / 15.7 / 1.6 / 5.1, kev-9b 5.4 / 9.9 / 0.85 / 2.7, laya 45 / 41 / 4.9 / 28, clef-flash 2.7 / 2.4 / 0.25 / 1.7.
+
+Files changed since the last checksums: p6_collect.py (control arm, repeat rows, rehearsal mode, control and check commands),
+p6_report.py (control arm, no-skill line, repeat check, sensitivity to the reference), open_models.py (local clef-flash; hosted
+entries renamed), open_models.sh (clef-flash download, environment and server). New: p6_run.sh, clef_server.py,
+requirements.clef.txt, protocol/p6_plan.md. The metrics, the rule A-C and the reference figures are unchanged.
+01b2a783094ae541d37ead8cf05dfdac4cc44ba47a6c42daccb1be484183027e  database/p6_collect.py
+1187483cfa1e1d0628977bb43d93866c3924246ec681647306524adb128acc9b  database/p6_report.py
+1383a942960d90d7942f014dfd5cc763187f68ab690a96a618758e0b72869939  database/p6_run.sh
+7f012b0118667bb6d9ea37dedd4efb9ea313ec7d071e40c4f0c77676399b667b  database/clef_server.py
+ba5484685a00eb26a687aa5ad14de34913d9e1be7392a8850afe5cea5db6be04  database/open_models.sh
+ae9603472467115dcd82feedd78e18d42deba82081fd5562b5c6a512ece5e5d7  database/requirements.laya.txt
+112dd4022449c213ff5fde0c82fcc41b5b666ffe9e908a8d57569c7e15add5b7  database/requirements.clef.txt
+7b4261d5c269e734ef73153fdf1a612f584eb81d8131b9c8e60299f6e7bf3c33  database/protocol/p6_plan.md
+c87468dc37a17db90b47a47e6d6275407eba8ec8f0c6f8cbeaba9cdb798ebf10  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+
+2026-10-11T02:31:14Z  amendment before collection; still no request about any evaluation row has been sent to any open model,
+and no evaluation row has been re-asked of Jev
+
+User decision (2026-10-11): laya-multilingual is added as a fifth local arm. Reason given before any data: Laya's README says its
+English checkpoint answers "no" to a yes/no question without criteria whatever the state, and that laya-multilingual does read
+the state. Same data, same payloads, same rule A-C; no arm is added after the start.
+- laya-multilingual  the same package (laya 0.4.1) and server, the multilingual checkpoint (mmBERT-base) in the multilingual
+  subfolder of convaiinnovations/laya at the same commit 7b928d82; its own server on port 8013, device MPS. Window for the
+  secondary window analysis: 1,024 tokens per question (its default), judged by the server's own truncation flag as for laya.
+- Order of the run: Jev control, laya, laya-multilingual, kev-4b, kev-9b, clef-flash.
+
+Checks, on made-up rows only
+- Made-up rows through its server: all four request shapes answered, no failure; on invented reviews its answers to the movie
+  question ranged from 0.00 to 0.78, i.e. it is not constant. Speeds, requests per second for movie / restaurant single / packed /
+  pairs: about 57 / 60 / 12 / 38.
+- The whole command was rehearsed again from an empty folder with the Jev control and all five local arms: all files complete,
+  no failed request, every local arm identical when asked twice.
+
+Files changed since the last checksums: open_models.sh, open_models.py, p6_run.sh (the new arm: port, server, download, order),
+p6_report.py (its name and window), p6_collect.py (usage text; column width of the count table), protocol/p6_plan.md.
+The metrics, the rule A-C and the reference figures are unchanged.
+1257dd53b003c13b264ee9cd1333f67e952091f80880f68bfd66484ec7bdab11  database/p6_collect.py
+a2dad77cd30dfc96664777133e3d098bd09a20c1863b605ecb6c9fa4ccd0d902  database/p6_report.py
+1cdbb1fc8178ec07c44379bb058f2679cfd53bcef276d2dfeb2760cabf8fe347  database/p6_run.sh
+7f012b0118667bb6d9ea37dedd4efb9ea313ec7d071e40c4f0c77676399b667b  database/clef_server.py
+05c459025b7535151e0068ae68c303ff209fc23c455563aa9fd56edfa8a8d725  database/open_models.sh
+ae9603472467115dcd82feedd78e18d42deba82081fd5562b5c6a512ece5e5d7  database/requirements.laya.txt
+112dd4022449c213ff5fde0c82fcc41b5b666ffe9e908a8d57569c7e15add5b7  database/requirements.clef.txt
+b591399dcdc4d46c9231cd2334295aa1db9e2e36b6967f2072241a3f3f6c936c  database/protocol/p6_plan.md
+5ca829015d3c3b8e5bea6dbf0c613a8b7fe0fb30078383e5f887300910d19d20  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+
+2026-10-11T02:36:08Z  start of collection, on the user's instruction. Command: ./database/p6_run.sh (all arms). Files as in the checksums above (verified identical just before the start).
+
+2026-10-11T10:27:38Z  end of collection and analysis
+
+- Run: 2026-10-11T02:36:13Z to 2026-10-11T10:24:43Z, a single pass of ./database/p6_run.sh. No interruption, no server restart,
+  no second pass for failed requests. The scripts are identical to the checksums recorded before the start.
+- Every arm answered all 29,249 requests. Requests without an answer: 0 in every arm and every dataset.
+- Control gate: the fresh and the cached Jev decisions agree on 99.52% of the 5,000 movie texts (bar 97%); mean absolute
+  difference of the probabilities 0.006. On the restaurant data 99.51%, on the pairs 99.76%.
+- Concurrency chosen by the probe: laya 4, laya-multilingual 16, kev-4b 16, kev-9b 16, clef-flash 16 (the servers are serial; the
+  three levels differed by a few percent).
+- Deviations from the plan during the run: none.
+- Cost: Jev control arm $0.4345. Rehearsals on made-up rows before the start: about $0.01. Local arms: no charge.
+- Outcome by the rule fixed above (A, B and C on all three datasets against the cached Jev): no arm can replace Jev as the default
+  backend. matches Jev on movie / restaurant single / pairs:
+    kev-4b             yes / no (AUC -0.021, interval contains the bar) / no (accuracy -4.0 points, Brier +0.036)
+    kev-9b             yes / no (accuracy -4.7 points, AUC -0.030, Brier +0.034) / yes (accuracy and AUC intervals contain the bar)
+    clef-flash         yes / no (accuracy -2.1, AUC -0.028, Brier +0.021) / no (accuracy -2.1, Brier +0.023; both intervals contain the bar)
+    laya               no / no / no
+    laya-multilingual  no / no / no
+  With the fresh Jev as the reference instead of the cached one, no verdict changes.
+- Calibration reading (equal-mass calibration error <= Jev's + 0.02): movie: kev-4b, kev-9b, clef-flash yes; restaurant: kev-4b,
+  clef-flash, laya-multilingual yes, kev-9b, laya no; pairs: none.
+- Practicality reading (at least 10% of Jev's rows per second on movie, restaurant single and pairs): kev-4b, laya,
+  laya-multilingual yes; kev-9b (9%, 15%, 7%) and clef-flash (5%, 5%, 4%) no.
+- Every local arm gave identical answers when the first 200 movie texts were asked again; Jev agreed with itself on 99.50%.
+- Observation outside the rule: Jev's own throughput on the pairs was 14.4 requests per second in today's control run against
+  38.5 in its earlier cold run; the practicality reading uses the earlier figures, as fixed above.
+- Full tables: out/database/p6/report.txt and results.json; summary in database/README.md.
+
+2026-10-11T11:15:49Z  after the experiment, on the user's instruction: Laya is dropped from the candidates
+
+- The collected judgments, the tables in out/database/p6/ and everything recorded above stay as they are: five local arms were
+  tested, and both Laya checkpoints failed on all three datasets.
+- Changed going forward: database/open_models.sh installs Laya only with "setup laya"; database/p6_run.sh runs kev-4b, kev-9b and
+  clef-flash by default. Laya's local environment and weights were deleted from open_models/. Its two rows can be reproduced with
+  "./database/open_models.sh setup laya && ./database/p6_run.sh laya laya-multilingual".
+- Post hoc, not part of the analysis plan above: database/p6_breakdown.py splits the errors of the three Qwen-based arms by question
+  kind and by missed versus false positives (out/database/p6/breakdown.txt). Read it as an explanation found after the results.
+- The analysis script, the collection script and the rule are unchanged.
+1257dd53b003c13b264ee9cd1333f67e952091f80880f68bfd66484ec7bdab11  database/p6_collect.py
+a2dad77cd30dfc96664777133e3d098bd09a20c1863b605ecb6c9fa4ccd0d902  database/p6_report.py
+255c4d96a184ad000832bb442d368f23301156e54b0b4f8d0bf1a3805906c60b  database/p6_breakdown.py
+389eb5c7760b58030deca6220f2be8067745e849df82b3dcaef75813218888e5  database/p6_run.sh
+7f012b0118667bb6d9ea37dedd4efb9ea313ec7d071e40c4f0c77676399b667b  database/clef_server.py
+ae3e490f05d2831c58aea8a60c8b5348e17015543cfc560af209be954f2822e8  database/open_models.sh
+ae9603472467115dcd82feedd78e18d42deba82081fd5562b5c6a512ece5e5d7  database/requirements.laya.txt
+112dd4022449c213ff5fde0c82fcc41b5b666ffe9e908a8d57569c7e15add5b7  database/requirements.clef.txt
+b591399dcdc4d46c9231cd2334295aa1db9e2e36b6967f2072241a3f3f6c936c  database/protocol/p6_plan.md
+833ff84bba992d699d6712b6261e43cb005b41584f62cef2129ada0298eb489c  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+
+2026-10-11T11:41:55Z  post hoc check, asked by the user: would more memory (full precision) have changed Kev's answers?
+
+- No memory limit was set for any arm. The arms ran as their servers default: Kev on MLX in bfloat16 (about 8 GB for kev-4b, 19 GB
+  for kev-9b), clef-flash in bfloat16, the only precision it is released in (22 GB).
+- database/p6_precision.py re-asked the first 300 movie texts, the first 300 pairs and the first 20 restaurant sentences x 21
+  questions on Kev's reference path (PyTorch, float32; 20 GB for kev-4b, 40 GB for kev-9b) and compared with the collected answers:
+    kev-4b  decisions that differ: 1 of 1,020; mean absolute difference of the probabilities 0.002-0.003; largest 0.027
+    kev-9b  decisions that differ: 0 of 1,020; mean absolute difference 0.001-0.002; largest 0.023
+  Precision does not explain the gaps to Jev. Outputs: out/database/p6/precision.kev-4b.txt and precision.kev-9b.txt.
+d956588b42d99e0f6f15b2eb6412a0938bc244d9410282a206d33dabd3df75a9  database/p6_precision.py

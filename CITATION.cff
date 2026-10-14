@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software or its results, please cite it as below."
+title: "KevDB: semantic SQL in DuckDB with open-source decision models"
+type: software
+authors:
+  - alias: ElyasEbrahim
+repository-code: "https://github.com/ElyasEbrahim/KevDB"
+license: MIT
+version: 0.1.0
+date-released: 2026-10-14
+keywords:
+  - decision models
+  - semantic SQL
+  - DuckDB
+  - entity matching
+  - open-source models

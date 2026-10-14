@@ -1,0 +1,27 @@
+name: Bug report
+description: Something in the library, the scripts or an experiment does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what you got instead. Include the full error message.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest command or SQL query that shows the problem.
+      render: shell
+  - type: input
+    id: backend
+    attributes:
+      label: Backend
+      description: For example kev-4b, clef-flash, jev, luna.low or mock.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and chip, Python version, `pip show kevdb duckdb` output.

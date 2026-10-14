@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+
+# Secrets stay local
+.env
+
+# Run outputs and the answer cache
+out/
+.jevcache.sqlite
+
+# Downloaded datasets and papers stay local (copyright remains with their authors)
+experiments/*/data/
+experiments/database/refs/
+
+# Local notes, talk scripts and exported pages
+misc/
+
+# Open-model code, environments and weights installed by scripts/open_models.sh
+open_models/

@@ -1,0 +1,16 @@
+2026-10-07T06:02:38Z  written before any estimator was run on the stage-2 judgments
+
+Primary analysis for stage 3 (semantic aggregates)
+- Population: distinct (movie id, reviewId) rows of the generated 16,000-review movie set. Truth: scoreSentiment = POSITIVE.
+- Estimand: share of positive reviews in the whole population.
+- Primary estimator: Jev probability for the question "positive" on every row, plus n = 200 human labels drawn by simple random
+  sampling without replacement, combined as  mean_all(p) + mean_sample(label - p)  (the same difference estimator used in the
+  offline check on entity-matching data before the experiment started). 95% interval: estimate +- 1.96 * standard error, with
+  finite-population correction.
+- Comparator: the same 200 labels alone (sample mean, same interval construction).
+- Success criteria (stated to the user in the plan): (1) the comparator needs at least 3x as many labels for the same mean squared
+  error, i.e. MSE(sample only) / MSE(primary) >= 3 over 2,000 random draws; (2) the primary 95% interval covers the truth in at
+  least 90% of draws.
+- Everything else (other budgets, hard-threshold proxy, regression and stratified estimators, other proxies, per-movie groups,
+  relational subsets, LLM labels instead of human labels) is secondary and reported as such.
+18c1134b498ac606eadc68292475c433910da60883c464b43d35f474f3f9cbdc  exp/p3_aggregates.py

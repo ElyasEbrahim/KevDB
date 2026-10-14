@@ -1,0 +1,9 @@
+% Smaller font in tables; figures do not float; captions already contain "Table 1" / "Figure 1", so LaTeX's automatic numbering is removed
+\usepackage{etoolbox}
+\AtBeginEnvironment{longtable}{\small}
+\renewcommand{\arraystretch}{1.25}
+\usepackage{float}
+\floatplacement{figure}{H}
+\usepackage{caption}
+\captionsetup{font=small,labelformat=empty,justification=raggedright,singlelinecheck=false,skip=6pt}
+\setlength{\emergencystretch}{2em}

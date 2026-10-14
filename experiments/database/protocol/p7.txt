@@ -1,0 +1,416 @@
+2026-10-11T12:53:28Z  written before any request about an evaluation row of this stage was sent to a local model, and before the analysis script was run on anything but made-up rows
+
+Stage 7: does embedding a local decision model (Kev-4B) in DuckDB bring something a cloud API cannot?
+
+Three candidate benefits are tested, each with its own line fixed below: (A) the local model as a semantic-SQL backend on a published
+benchmark, (B) the server's cache of texts it has already read, used as a "semantic index", (C) calibration parameters fitted on a
+few human labels and stored in the database like statistics. Everything runs on this machine (Apple M3 Max, 64 GB). No paid API is
+called. Jev, the cheap LLM and the published systems appear only as comparison columns taken from the cached results of earlier
+stages.
+
+What was known when this was written
+- Stages 1 and 6 (database/README.md). For Kev-4B in particular: its accuracy, AUC, Brier score, calibration and throughput on 5,000
+  movie reviews (question "positive"), 1,000 restaurant sentences x 21 predicates and the Walmart-Amazon test set, and what
+  recalibration with 200 human labels does on those three datasets (stage 6, secondary analysis).
+- Kev-4B has never been asked: any pair, choice or score question of the SemBench queries; the question "clearly positive"; any
+  Rotten Tomatoes review outside the two SemBench samples; any pair of abt-buy, amazon-google or dblp-acm; any pair of a validation
+  split.
+- The Kev authors' own figures for the cache (their README): five questions about a 270-token text, 721 ms the first time and
+  136 ms after that; a 65,000-token document 84.5 s, then 0.7 s (both on an M5).
+- A planning probe on made-up rows only (2026-10-11; 300 invented reviews, 24 invented documents, none in any dataset; answers not
+  examined). Later questions on a cached text were faster by about 1.4x-2.0x for 46-token reviews and 10x-69x for documents of
+  1,400-9,800 tokens. Every cached text cost about 55 MB of server memory whatever its length, plus about 32 KB per token; 320 cached
+  reviews grew the server from 8.5 to 27.6 GB. The fixed part follows from the architecture (24 Gated DeltaNet layers, each keeping a
+  32 x 128 x 128 fp32 state). So, before any real row was asked, it was already likely that line B1 below is met by a wide margin,
+  that the short-text speed line is missed or borderline, and that a cache for a whole short-text table does not fit in memory. The
+  lines are kept as written; these expectations are recorded so that the result is not read as a surprise.
+
+Model and serving
+- kev-4b exactly as in stage 6: Kev code at tag kev-1.0, weights jaredpalmer/kev-4b@v1.0, base Qwen/Qwen3.5-4B-Base@1001bb4d, MLX
+  backend in bfloat16, shipped temperature 2.406, its own server started by database/open_models.sh inside the macOS sandbox
+  (no outbound network), weights offline. A decision is p >= 0.5. No threshold, prompt or temperature is tuned.
+- The server is embedded in DuckDB through src/jevsql: register(con, prefix, open_backend("kev-4b")) and the SQL functions
+  <prefix>_noul, _noulc (new: a yes/no question with criteria), _choice, _score.
+- The cache is the server's own "state-prefix cache". Its settings are environment variables of the server: KEV_PREFIX_CACHE
+  (texts kept, default 4) and KEV_PREFIX_MAX_TOKENS (tokens kept in all, default 65,536). Nothing in Kev's code is changed.
+- Only if the user approves it before collection starts: kev-0.8b (jaredpalmer/kev-0.8b@v1.0, 1.84 GB to download). Same data, same
+  analysis, same lines, its own verdicts; its cache sizes would be set from a made-up-row probe and recorded here before the start.
+  No arm is added after the start.
+
+Part A. Semantic-SQL benchmark (database/p1_movie.py, mode "open")
+- The ten SemBench movie queries on the 2,000-row sample, with the SQL and questions of stage 1 unchanged (only the function prefix
+  differs), plus the three rewritten joins Q5r-Q7r. The server runs with its shipped settings and is started fresh. Each query is
+  cold (its own cache namespace in jevsql), concurrency 16 as for Jev. One run: the model's answers are deterministic (stage 6).
+- Scored with SemBench's own evaluator; average quality over Q1-Q10 as in stage 1 (a relative error e counts as 1 / (1 + e)).
+- References, from out/database/p1/scores.json: Jev 0.7648 average quality, 312.9 s, $0.279 (median of three runs); the cheap LLM
+  (GPT 6 Luna, low reasoning) 0.7451, 1,646.9 s, $0.851; the published systems as in the stage-1 table.
+- Line A1 (usable as a SQL backend): average quality over Q1-Q10 >= the cheap LLM's (0.7451, unrounded value from the scores file),
+  and no query computed with unanswered rows (a failed request is re-asked in up to 4 passes).
+- Line A2 (the "wonder" line for A): average quality >= Jev's (0.7648) and total time for Q1-Q10 <= the cheap LLM's (1,646.9 s).
+  Expectation recorded: from the stage-6 throughput (8 requests/s on reviews, 4.5 on record pairs) the 16,556 requests should take
+  2,400-2,900 s, so A2 is expected to be missed on time.
+- Reported next to the lines: the per-query table; cost (no marginal cost; hardware and electricity are not counted).
+- A' (secondary): the ten queries whose requests contain one review each (Q1-Q4, Q8, Q5r-Q7r, Q9, Q10, in that order), run again on a
+  fresh server with the cache at the memory budget (KEV_PREFIX_CACHE=300). Reported: time per query against the default run, whether
+  the result sets are identical, the server's hit count, and the totals against Jev (90.5 s) and the LLM (456.2 s) on the same ten.
+
+Part B. The cache of texts already read (database/p7_cache.py)
+- Datasets and questions (database/p7_data.py; question order fixed):
+    movie   300 distinct review texts of the SemBench 2,000-row sample (first 300 by hash with salt "p7"); the four stage-1 questions
+            in order of first use: clearly (yes/no), positive (yes/no), sentiment (choice), liked (score).
+    mams    the first 300 sentences of the fixed stage-4 order; the first three of the 21 predicates (mention:food, mention:staff,
+            mention:service).
+    long    40 documents. Source: Rotten Tomatoes movies that are in neither SemBench sample; a movie's reviews (distinct texts, in
+            reviewId order), one numbered line each, until the next would exceed 24,000 characters; only movies with more reviews
+            than fit. 20 documents whose share of positive reviews is >= 0.5 and 20 below, each the first 20 by hash of the movie id.
+            Three questions written now and not changed: the stage-1 "positive" / "sentiment" / "liked" reworded from one review
+            to a set of reviews (LONG_QUESTIONS).
+    long1500, long3000, long6000, long12000   shorter prefixes (character budgets) for the first 12 movies of each stratum.
+- Arms: off (KEV_PREFIX_CACHE=0), table (cache large enough for every row of the dataset), default (shipped: 4 texts).
+- One run = one dataset x one arm on a freshly started server: warm-up on made-up rows of the same kind (every question once), then
+  the same rows asked one question per pass, concurrency 1, in blocks; after each block the server's hit/miss counters and the
+  server's memory (footprint -f bytes) are read, outside the timed intervals. The off arm ends with one pass that packs all the
+  questions into one request (reference). Answers are stored and not looked at before all collection is finished.
+- Repetitions: off and table three times each for movie, mams and long, in the order off/table, table/off, off/table; default
+  once; the four shorter tiers off and table once.
+- Primary measure, per dataset: later-question speedup = (sum over questions 2..K of the median seconds with the cache off) /
+  (the same with the table cache).
+- Mechanism check: in the table arm every request of question 1 is a miss and every request of the later questions is a hit; in the
+  off arm there is no hit. A dataset where this fails is reported as failed; nothing is patched.
+- Fidelity: an answer's decision is p >= 0.5 (yes/no), the chosen option (choice), the most probable level (score). Agreement =
+  share of answers of questions 2..K, all repetitions, whose decision with the table cache equals the decision with the cache off;
+  a missing answer counts as different. Also reported: mean and largest probability difference, question 1, and repeat runs of
+  the same arm.
+- Memory model: least squares without intercept on the block readings of the first table run of every dataset,
+  (footprint - footprint after warm-up) = a * texts cached + b * request tokens of question 1. Capacity: with a budget of 24 GB for
+  the cache (64 GB machine, 8.5 GB of weights), does the cache for a whole table fit - the 40 documents; the 1,864 distinct review
+  texts of the SemBench sample; the 3,949 MAMS sentences (tokens per text taken from the 300-row samples).
+- Lines
+    B1  long documents: later-question speedup >= 3.
+    B2  agreement >= 99.5% on each of movie, mams, long (99.5% is what Jev agrees with itself when asked twice).
+    B3  the cache fits the 24 GB budget (by the memory model).
+  "The cache works as a semantic index for long documents" = B1 and B2 (long) and B3 (the 40 documents).
+  "It works for whole short-text tables" = later-question speedup >= 2 on both movie and mams, and B2 on both, and B3 for both whole
+  tables.
+- Reported next to the lines: the cost of building the cache (question 1, table against off); the default arm; the packed pass;
+  speedup against measured tokens across all seven datasets; per-row latency; later-question rows per second against Jev's cold
+  throughput on the same kind of data (stage-6 reference figures); the spread between repetitions (a spread above 15% is flagged).
+- Sanity reading on the long documents (cache off, first run): accuracy and AUC of "mostly positive?" against the documents' own
+  majority label, accuracy of the choice question, rank correlation of the score with the share of positive reviews. AUC >= 0.8 and
+  correlation >= 0.5 read as "the answers on documents of this length are meaningful"; otherwise the speed result carries that
+  caveat. Kev-4B's validated context is 8,192 tokens; the longest request is reported.
+
+Part C. Calibration parameters stored in the database (src/jevsql/calibration.py, database/p7_calibration.py)
+- Form: table semantic_calibration(model, predicate, scope, a, b, ...); macro calibrated(p, model, predicate, scope) =
+  sigmoid(a + b * logit(p)) with the parameters looked up by the database, p clipped to [0.001, 0.999]; raw p when no parameters
+  exist; kev_noul_cal / kev_noulc_cal apply it to the model's answer. Fit: the stage-6 recalibration (a + b * logit(p) by maximum
+  likelihood with Platt's target smoothing), on human labels only.
+- Data: the record-matching datasets of entity_match/. Fresh for Kev: abt-buy, amazon-google (product question) and dblp-acm
+  (publication question). Seen in stage 6: walmart-amazon (product question). Questions and states are the ones Jev answered.
+    label pool  1,000 pairs of the validation split (first 1,000 by hash of the pair id with salt "p7:<dataset>");
+    stored fit  the first 200 pairs of the pool, scope = the dataset;
+    test        the whole test split, one SQL statement returning the raw probability, the probability calibrated with the
+                dataset's own parameters, and the probability calibrated with walmart-amazon's parameters.
+- Reference: Jev's cached judgments on the same test pairs (out/entity_match), as served, no labels.
+- Rule (the stage-6 rule): a source matches Jev on a test set if accuracy >= Jev's - 2.0 points, AUC >= Jev's - 0.02 and Brier <=
+  Jev's + 0.02, paired on the same pairs; more than 5% unanswered fails. Point estimates decide; 2,000 bootstrap resamples of pairs
+  give 95% intervals, and a difference whose interval contains the bar is reported as not separable from it.
+- Line C: "stored calibration works" = with its own stored parameters Kev-4B matches Jev on all three fresh test sets, and as served
+  (raw) it fails on at least one of them. If raw already matches on all three: reported as "calibration not needed", not as an
+  effect. If the calibrated model fails anywhere: not met, with the failing condition named (the calibration is monotone, so it
+  cannot move AUC).
+- Reported next to the line: accuracy, AUC, Brier, equal-mass calibration error, precision, recall, F1; the change raw -> calibrated
+  with intervals; the largest difference between the probability computed in SQL and the same formula in Python (anything above
+  1e-9 is a bug); transfer (walmart-amazon's parameters on abt-buy and amazon-google, the same predicate on other tables; dblp-acm
+  has another predicate, so the macro must return the raw probability there); label counts 25 / 50 / 100 / 200 / 500 drawn 200
+  times from the pool; on walmart-amazon, agreement of today's answers with the ones collected in stage 6.
+- Replay, not a new test (data already seen in stage 6): the stage-6 answers of Kev-4B on the 5,000 reviews and 1,000 sentences x 21
+  predicates are replayed from its cache through the SQL functions with no request sent; one parameter pair per predicate fitted on
+  the first 200 texts / sentences of the fixed order, scored on the rest, against one pair shared by all predicates.
+
+Overall reading
+The question "is there a wonder, and of which kind" is answered by the three verdicts separately: A2, the two B verdicts, C. Two
+properties are stated as facts, not tested: no marginal cost per request, and the data never leaves the machine (the server cannot
+open an outbound connection).
+
+Rules of collection
+- One command, database/p7_run.sh; the handling of every anticipated failure is fixed in database/protocol/p7_plan.md (section 6).
+  Apart from the checks before the start, nothing stops the run.
+- Until all collection is finished only counts, timings and memory readings are looked at; no answer is examined, and no question,
+  threshold, setting or line is changed. Anything added after the results are seen is marked post hoc.
+- No Jev output is used to train, fine-tune, calibrate or pick a threshold for any open model (TypeSafe customer agreement
+  section 2.3(b)); calibration uses human labels only.
+
+Checks done before this was frozen, all on made-up rows (P7_REHEARSAL=1), never on evaluation rows
+- Offline tests: 42 pass (9 new: tests/test_calibration.py, tests/test_p7.py).
+- The whole command (database/p7_run.sh --rehearsal) run from an empty folder: both SQL steps, the 29 cache runs, the four matching
+  datasets, the replay path with 22 predicates, counts and analysis; no failed request; 25 minutes. Read off the made-up rows, for
+  planning only: memory model 56.9 MB per cached text + 30.9 KB per token (R^2 0.9997); answers on cache hits identical to the
+  cache-off answers; later-question speedup 1.75x-1.98x on short rows and 42x on four documents of 5,800 tokens.
+- Failure drills: a server killed during a cache run was restarted and the run repeated from scratch; killed on both attempts, the
+  run was skipped, listed as missing by the count and by the report, and completed when the same command was run again.
+- The analysis script gives byte-identical output when run twice on the rehearsal results.
+- Three defects were found by the tests and the rehearsal and fixed before freezing; each would have produced wrong numbers
+  without an error: (1) DuckDB's least/greatest skip NULL, so the calibration macro turned an unanswered row into 0.999; (2) a
+  column name passed into the macro (e.g. "question") was captured by the parameter table's own column of the same name inside
+  the lookup subquery, so every row got the same parameters, and only in a WHERE clause - the arguments are now evaluated in an
+  innermost SELECT without FROM, and the tests cover select list, WHERE, FILTER, GROUP BY, per-row predicates, clashing column
+  names and NULL; (3) when several answer comparisons were pooled, the mean probability difference was weighted by the wrong count.
+- The 26,000 requests of the replay are all present in the stage-6 cache of kev-4b (keys counted, answers not read); the replay
+  works on a copy of that cache.
+- Earlier stages are unaffected by the changes to shared files (src/jevsql/sql.py: new function _noulc; database/p1_movie.py: new
+  mode "open" and one more field in the run record): the stage-1 and stage-6 reports replay byte-identically.
+- Nothing was installed or downloaded. Project environment: Python 3.14.8, duckdb 1.5.6, numpy 2.5.3, scipy 1.18.1, pandas 3.0.6;
+  the model environment is the stage-6 one, untouched.
+
+Expected duration of the real run, from these measurements and the stage-6 throughput: sql 43 min, budget 9 min, cache 1.9 h,
+calibration 47 min; about 3.7 hours in all (3 to 5.5).
+
+2026-10-11T13:57:54Z  scripts frozen; still no request about an evaluation row of this stage has been sent to any model. Waiting for the user's instruction to start.
+c5dd3cc0deb4ba7087ed7339d8fe80ba96088f30c9fdb77ce1a184438a75211f  database/p7_data.py
+7fd3c2ab9f0f2d7cac3a27064aba431d385117e1fe0b49402fd90f8f289fc674  database/p7_cache.py
+7dc24361c0ff9221e3356c85edc1d1cfd660830edd7d33c47214190217e6d012  database/p7_calibration.py
+cc11e104fbdb74704625953676a15ad9dc574231525134220432ff8b0fcfd41d  database/p7_report.py
+b49376d5128e3a03c63932732ff2e2f37f0eb6309544113dc92db16183ee02d6  database/p7_run.sh
+c3ec08a1b7f96a0c9e0ead3db8c294f96200a870cbe395c9fa6be1d24b7b31ff  database/p1_movie.py
+ae3e490f05d2831c58aea8a60c8b5348e17015543cfc560af209be954f2822e8  database/open_models.sh
+721842b36f17268e817990721d5308a6b4813163ad6893321b3f0be01beb5e07  database/protocol/p7_plan.md
+264dd2c83b363dc4708541da5ce4b76125ac5ed065f325154466ac528b6d615f  src/jevsql/sql.py
+30a3346bb7a9455c3d7087e485d64f0e790faaeffb7b6f39d45890196dee33ce  src/jevsql/calibration.py
+39db7435b4687b49e1892f6455029d2644afa802fa198ff8cbb16b2d42e70277  src/jevsql/__init__.py
+833ff84bba992d699d6712b6261e43cb005b41584f62cef2129ada0298eb489c  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+03f7ae5a4574f5d3c9f8ec34a60b21fea3fd0b81ff51ba4f0dcee1f574b24b89  src/jevsql/engine.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+c52f2fa05a767828b343ecd52276fdd7c44ce17a7c6e16f32345a164bc3bf260  tests/test_calibration.py
+d75611fca82d6cc9786d83c475800d04a73f5ce717c359f9b5172edc4290021a  tests/test_p7.py
+
+2026-10-12T06:47:05Z  the user's instruction, received before any request about an evaluation row was sent
+
+The files are identical to the checksums above (verified now). The user said: start; use the machine's memory to the maximum; do
+both optional items. Nothing is collected until the amendment below is completed with numbers and new checksums.
+- kev-0.8b is added as a second arm (download approved: Qwen/Qwen3.5-0.8B-Base 1.77 GB and jaredpalmer/kev-0.8b 0.07 GB from
+  Hugging Face, into open_models/). Same data, analysis and lines; its own verdicts. No further arm is added.
+- A Jev reference on the 40 long documents is added (paid, about $0.03, approved): reference column only, no line attached.
+- "Memory to the maximum" replaces the fixed 24 GB cache budget and the fixed sizes that followed from it (300 rows per short-text
+  dataset, 300 cached texts in step A'). The new sizes come from a capacity probe on made-up rows, per model, and are written
+  below before collection starts. No answer of any evaluation row exists yet, so none of this can depend on results.
+
+2026-10-12T07:42:44Z  amendment completed before collection; still no request about an evaluation row of this stage has been sent to any model
+
+A. Memory to the maximum
+- Rule, fixed in database/p7_capacity.py before it was run (made-up rows only): invented reviews are read into the cache 25 at a
+  time; after each block the server's memory, the system's available memory and swap are read, and the first 20 texts are asked a
+  second question (cache hits). The probe stops when available memory falls under 4 GB, the server exceeds 75% of physical memory,
+  swap has grown by more than 1 GB, the median hit latency exceeds 1.25 times its first value, the server reports an out-of-memory
+  retry, or 4,025 texts are cached. The last block before the stop is the last healthy one. Budget = 90% of the cache memory at
+  that block; number of texts = that budget at the measured memory per text, rounded down to a multiple of 50.
+- kev-4b    healthy up to 675 texts (server 46.4 GB, 57.8 MB per text); stopped at 700 because swap had grown by 1.5 GB.
+            Budget 34.3 GB, 600 texts.
+- kev-0.8b  healthy up to 2,125 texts (server 47.6 GB, 22.0 MB per text); stopped at 2,150, server above 75% of physical memory.
+            Budget 41.2 GB, 1,900 texts.
+  Raw readings: out/database/p7/<model>/capacity.json. Available memory before the probes was 42-47 GB of 64 (other programs
+  were running); the budgets are what this machine could hold in that state, not what a freshly booted one could.
+- What changes (database/p7_data.py, CAPACITY):
+    B3   the budget is the model's budget above instead of 24 GB.
+    A'   the cache holds the model's budget of texts: 600 (kev-4b), 1,900 (kev-0.8b), instead of 300.
+    B    each short-text dataset is the whole table when the table plus the 20 warm-up rows fits within the budget of texts,
+         otherwise its first rows in the fixed order as far as they fit (instead of 300 rows): kev-4b movie 580 of 1,864 and
+         mams 580 of 3,949; kev-0.8b movie 1,864 (the whole table) and mams 1,880 of 3,949.
+  Lines B1-B3 and both verdict definitions are unchanged.
+- Expectation recorded: kev-0.8b's cache holds the whole movie table; neither model's holds the whole MAMS table, so the verdict
+  "works for whole short-text tables", which needs both tables, is expected to fail for both models on capacity. The movie
+  table is reported on its own next to the verdict.
+
+B. kev-0.8b
+- jaredpalmer/kev-0.8b@v1.0 = commit bf75a6a8848e, base Qwen/Qwen3.5-0.8B-Base@dc7cdfe2ee41, shipped temperature 2.351; the same
+  Kev code (kev-1.0) and environment as kev-4b, MLX in bfloat16, its own server on port 8014 inside the same sandbox. Downloaded
+  2026-10-12 with database/open_models.sh setup kev-0.8b (1.84 GB, into open_models/).
+- Same data, questions, analysis and lines as kev-4b; separate verdicts. It was not part of stage 6: there is nothing to replay
+  for it, and all four matching datasets are new to it; line C uses the same three datasets as for kev-4b.
+- Known about it before collection: the authors' figures (accuracy on new sources 0.65-0.70 against 0.82-0.84 for kev-4b, about
+  five times faster), and from made-up rows the memory per cached text and its speed (about 35 requests per second on short
+  reviews). Expectation recorded: it misses A1 and line C on quality; its interest is part B.
+
+C. Jev reference on the long documents (database/p7_jev_long.py)
+- jev-1.13.0 through the official API on the 40 documents and three questions of the dataset "long": one question per pass,
+  concurrency 1, about $0.03. Stored: answers, per-request latency, billed tokens, cost.
+- A reference column only, with no line: latency per document and time per pass next to the local arms, cost per question, and
+  the same sanity reading (accuracy, AUC, rank correlation) for Jev's answers. Jev's answers are used for nothing else.
+- Concurrency 1 measures the latency of one request; the API can be called in parallel, which the report states.
+- If the key, the quota or the network fails, the run goes on and the column stays empty until it is collected.
+
+D. Execution
+- One command, database/p7_all.sh: kev-4b (the four steps of database/p7_run.sh), kev-0.8b (the same), the Jev reference, and
+  only then the analysis for both models. In this mode database/p7_run.sh does not run the analysis (P7_NO_REPORT=1), so nothing
+  is analysed before all collection is finished.
+- database/p7_plan.md is updated accordingly (sections 2, 3, 4, 5, 6 rules 15-16, 7, 8, 9, 11).
+
+E. Checks for this amendment, on made-up rows only
+- Offline tests: 44 pass.
+- kev-4b: the command for one model (database/p7_run.sh --rehearsal, analysis off) run again from an empty folder with the amended
+  scripts: all steps complete, no failed request.
+- The final command (database/p7_all.sh --rehearsal): kev-4b (complete, passed through), kev-0.8b from an empty folder (both SQL
+  steps, the 29 cache runs, the four matching datasets; no replay for it), the Jev reference, both analyses: complete, no failed
+  request, 11.5 minutes.
+- Jev reference on 4 made-up documents: 12 requests, $0.0030, no failure; latency per request 0.5-7.2 s.
+- Read off made-up rows for kev-0.8b, for planning only: memory model 22.0 MB per cached text + 12.0 KB per token; later-question
+  speedup about 1.7x on short rows and 22x on documents of 5,800 tokens.
+- Added to the report after the rehearsal, a reading and not a criterion: for every table run, how many texts the server actually
+  held at the end, its memory, and the number of out-of-memory retries - the direct evidence next to the memory-model capacity
+  (kev-0.8b's whole movie table needs 41.1 GB by the model against a budget of 41.2 GB, so the model-based reading is at the margin).
+- The stage-1 and stage-6 reports replay byte-identically after the changes.
+- Nothing was installed; the only download is the approved kev-0.8b weights.
+
+F. Expected duration: kev-4b about 4.2 h (sql 43 min, budget 9 min, cache 2.5 h, calibration 47 min); kev-0.8b about 2.3 h (10 min,
+3 min, 1.9 h, 11 min); Jev reference 3 min; about 6.6 hours in all (4.6 to 8.6). Cost: the Jev reference, about $0.03; the
+rehearsal of that step on made-up documents cost $0.003.
+
+Files changed since the checksums of 2026-10-11T13:57:54Z: p7_data.py (CAPACITY, sizes of the short-text datasets, budget setting,
+shared output folder), p7_cache.py (prints the budget setting), p7_calibration.py (no replay for a model without stage-6 data),
+p7_report.py (budget per model; the Jev column), p7_run.sh (budget setting from p7_data.py; P7_NO_REPORT), open_models.sh and
+src/jevsql/open_models.py (kev-0.8b), protocol/p7_plan.md, tests/test_p7.py. New: p7_capacity.py, p7_jev_long.py, p7_all.sh.
+The stage-1 and stage-6 reports still replay byte-identically.
+
+dccb0d0ea1cc05efb046d01c73b5e39b30a142e4d49598b8994aed5ce875bdec  database/p7_data.py
+aab704d00db60185f5fe1200315577958f254b6d7f085d0022f7257b0bf67d24  database/p7_cache.py
+545afea1a2b28f7d9e5a54054e8b6d20b86b89e6d8194d95d3fa22460c533fbb  database/p7_calibration.py
+836da921d315ef5d0552789b53b34413c0b44fd02f6a229a3a8cbba19871b115  database/p7_report.py
+aeb9bfd0761533a1a678405d8b869663d16e75ab9db382ad52fca35220c06d3a  database/p7_run.sh
+cfc40515bdcdd146e9c26ecc8db6f318093537ce75a294f3167db40ba8f51138  database/p7_all.sh
+4356c8fd6385cd5a8c26bb22a10620e9965acc6f7decdd5ce36e89a52d370be4  database/p7_capacity.py
+832a1d2f06bbb7f193d0a8469bd8749cca38b13cfc3a9e441866d2c2d6c0ad91  database/p7_jev_long.py
+c3ec08a1b7f96a0c9e0ead3db8c294f96200a870cbe395c9fa6be1d24b7b31ff  database/p1_movie.py
+dbe3e97135cf80cdf8393103c1d2d42bb3c8082f395c91d3f0adddc47abbaa30  database/open_models.sh
+8278516fe0a8ed7aafcb90c7a1bfb087d0a04f18046b9595e52222cf554e574c  database/protocol/p7_plan.md
+264dd2c83b363dc4708541da5ce4b76125ac5ed065f325154466ac528b6d615f  src/jevsql/sql.py
+30a3346bb7a9455c3d7087e485d64f0e790faaeffb7b6f39d45890196dee33ce  src/jevsql/calibration.py
+39db7435b4687b49e1892f6455029d2644afa802fa198ff8cbb16b2d42e70277  src/jevsql/__init__.py
+2fa07f7b7ce690dcd03d33362b480e4c350f287c341a89bfe00187f799126095  src/jevsql/open_models.py
+ad26556cea76e9b7a41d66b291f1ed32d903de8987d60329dff25d45b156b75a  src/jevsql/backends.py
+03f7ae5a4574f5d3c9f8ec34a60b21fea3fd0b81ff51ba4f0dcee1f574b24b89  src/jevsql/engine.py
+c9202651c67dac690372fa43e700133f5423a9e93e684c7668d26f263c85b0d7  src/jevdata/client.py
+c52f2fa05a767828b343ecd52276fdd7c44ce17a7c6e16f32345a164bc3bf260  tests/test_calibration.py
+eb40680eec9ced9b77c3d5ab86762428053db7435b40b7f1e78fdb2cce20ed14  tests/test_p7.py
+
+2026-10-12T07:43:32Z  start of collection, on the user's instruction. Command: ./database/p7_all.sh (kev-4b, kev-0.8b, Jev reference, then both analyses). Files identical to the checksums above (verified just before the start). Available memory at the start: about 51 GB of 64.
+
+2026-10-12T07:47:35Z  the first launch aborted before any request; scripts fixed and relaunched
+
+- The launch at 07:43:32Z stopped at once: started detached from the session (through a Python wrapper, which sets LC_CTYPE=UTF-8),
+  /bin/sh read a full-width colon after "$m" as part of the variable name and database/p7_all.sh failed with "unbound variable" on its
+  first log line. database/p7_run.sh was never started, no server was started and no request was sent (out/database/p7 held only the
+  two capacity.json files). The rehearsals had been run from a shell without a locale, where the same line works.
+- Fix, wording of log lines only: in p7_all.sh, p7_run.sh and open_models.sh every variable directly followed by a non-ASCII
+  character is now written with braces. Checked in both locales, and the final command was passed once more over the rehearsal
+  data through the same detached launcher: complete, no error. 44 tests pass.
+- Deviation recorded: one aborted launch, nothing collected. New checksums of the three changed files (the others are unchanged):
+dc7be69d8a8a057d7651c76694b9a75a76473386022609ea18115845eb8ba1b7  database/p7_all.sh
+26df698f9eb7d11140b06e91a0df6a6b3f2397cf1203d10688ae3230636f5022  database/p7_run.sh
+9862706bf701949a5e306af85f318945523cdbcf47097964ceff2c542f213611  database/open_models.sh
+
+2026-10-12T07:47:43Z  start of collection (second launch), on the user's instruction of 2026-10-12. Command: ./database/p7_all.sh. Files identical to the latest checksums above.
+
+2026-10-12T11:18:10Z  the user's instruction during the run: kev-0.8b waits for a further instruction; everything else goes on as planned
+
+- State when the instruction came: kev-4b had finished its sql, budget and cache steps without an interruption or a failed run and
+  was in its calibration step. No request about an evaluation row has been sent to kev-0.8b, and no answer or report of kev-4b has
+  been looked at.
+- Done: the driver process (database/p7_all.sh), which would have started kev-0.8b next, was stopped; the running kev-4b collection
+  (database/p7_run.sh --model kev-4b) was not touched. A follow-up (out/database/p7/finish_kev-4b.sh) waits for it to finish and
+  then runs the remaining commands of p7_all.sh as they are: the Jev reference on the long documents, then the analysis for kev-4b.
+- Deviation recorded: the analysis of kev-4b (and of the Jev reference) is therefore run before kev-0.8b is collected, not after
+  all collection as written above. The kev-0.8b arm stays exactly as frozen in the amendment of 2026-10-12 (data, questions,
+  settings from the capacity probe, lines, scripts with the checksums above); when the user gives the instruction it is run
+  unchanged with  P7_NO_REPORT=1 ./database/p7_run.sh --model kev-0.8b  followed by  P7_MODEL=kev-0.8b python database/p7_report.py.
+  Its results will be read knowing kev-4b's; nothing about it can be adjusted to them.
+  database/protocol/p7_plan.md now carries a note on this instruction at its top; its new checksum:
+bf7e37524845a4e9c3bb32a84cdbb13bc6da26a2450816e3b4fabec9e8845e58  database/protocol/p7_plan.md
+
+2026-10-12T12:02:39Z  end of collection and analysis for kev-4b and the Jev reference; kev-0.8b not run (postponed by the user)
+
+- Run: 2026-10-12T07:47:43Z to 11:55:23Z, one pass of database/p7_run.sh for kev-4b: sql 46.5 min, budget 10.4 min, cache 147.5 min
+  (29 runs), calibration 43.1 min. No interruption, no step repeated, no failed request, no out-of-memory retry. Jev reference
+  11:55:37Z to 11:56:26Z. Analysis 11:56:46Z. The collection scripts are identical to their latest checksums above.
+- Counts: sql 16,940 requests, all new, none unanswered. budget 4,716. cache 33,532 requests besides the warm-ups, none failed or
+  re-asked. calibration 12,731 rows = 12,671 distinct requests, 12,624 new (47 pairs occur both in a label pool and in its test set
+  and were answered once: abt-buy 8, amazon-google 30, dblp-acm 9), none unanswered. replay 26,000 requests from the stage-6 cache,
+  none sent. Jev reference 120 requests, none failed.
+- Conditions: available memory at the start of every cache run 42 GB or more; the table runs on the short-text datasets held 600
+  texts with the server at 43.0-43.1 GB; spread between repetitions at most +8.2% / -6.2% (flag at 15%).
+- Mechanism check: passed on all seven datasets (table arm: every request of question 1 a miss, every later one a hit; off arm
+  and the shipped default: no hit).
+- Outcome by the lines fixed above (kev-4b):
+    A1  met: average quality 0.8027 against the cheap LLM's 0.7451; no unanswered row.
+    A2  not met: quality is above Jev's (0.8027 against 0.7648) but the ten queries took 2,725.3 s, 1.65 times the LLM's 1,646.9 s
+        (8.7 times Jev's).
+    B, long documents  met: later-question speedup 43.3 (repetitions 41.9, 44.9, 43.9); decisions identical on 100.00% of the answers
+        (probabilities identical to the last digit); the 40 documents need 9.1 GB against the budget of 34.3 GB.
+    B, whole short-text tables  not met: speedup 1.76 (movie) and 1.90 (mams) against 2; the whole tables would need 106.6 GB and
+        226.0 GB against 34.3 GB; agreement 100.00% on both.
+    Sanity reading on the long documents: AUC 0.965, rank correlation 0.960, i.e. meaningful by the reading fixed above; longest
+        request 6,520 tokens.
+    C   not met: abt-buy matches Jev as served and with its parameters; amazon-google fails raw and calibrated (calibrated accuracy
+        -1.4 points and Brier +0.005 are within the bars, AUC is 0.024 below Jev's, interval containing the bar; F1 at 0.5 falls from
+        0.557 to 0.283); dblp-acm fails raw and calibrated (accuracy -6.8 points, Brier +0.036). On walmart-amazon (seen in stage 6)
+        the calibrated model matches Jev, and today's answers are identical to those collected in stage 6.
+  Memory model: 56.9 MB per cached text + 31.1 KB per token, R^2 0.9997. SQL against Python: no difference.
+- Expectations recorded before collection: all held (B1 by a wide margin, short-text speedup below 2, whole tables not fitting,
+  A2 missed on time). Not anticipated: kev-4b's average quality on the ten queries is above Jev's; the difference comes mainly
+  from Q6, Q3 and Q4, and the LIMIT queries move in steps of 0.1.
+- Jev reference: median 0.34-0.37 s per document and question, 15.5-17.0 s per pass of 40 documents, $0.0307 for the three passes;
+  kev-4b 4.2-4.5 s per document without the cache and 0.08-0.12 s on a cache hit.
+- Deviations: (1) the aborted first launch, nothing sent (recorded above); (2) the user's instruction during the run: kev-0.8b
+  postponed, so kev-4b was analysed before kev-0.8b is collected (recorded above); (3) the analysis script ended with a fixed
+  sentence saying that no paid API had been called, which is wrong since the Jev reference was added: corrected to print what the
+  Jev reference cost, analysis re-run, every other line of the report and results.json unchanged; new checksum below;
+  (4) post hoc, not part of the plan: the arithmetic that with these timings the local model's cumulative time on the 40 documents
+  falls below Jev's (concurrency 1) from the 14th question on.
+- Cost: Jev reference $0.0307; its rehearsal on made-up documents $0.0030. Local model: no charge.
+- Full tables: out/database/p7/kev-4b/report.txt and results.json; summary in database/README.md (section "Phase 7").
+958438291517d71666c8203047e1d11576012dc99620eb5ae22aae5f61bb88f7  database/p7_report.py
+
+2026-10-13T02:16:28Z  start of collection for kev-0.8b, on the user's instruction of 2026-10-13
+
+- The arm is run exactly as frozen on 2026-10-12: data, questions, cache sizes from the capacity probe (1,900 texts, 41.2 GB),
+  lines, scripts. All 20 files are identical to their latest checksums above (verified now). Commands, as written above:
+  P7_NO_REPORT=1 ./database/p7_run.sh --model kev-0.8b, then P7_MODEL=kev-0.8b python database/p7_report.py
+  (wrapped in out/database/p7/run_kev-0.8b.sh so that it runs detached from the session).
+- kev-4b's results and the Jev reference are known (analysed on 2026-10-12, the deviation recorded above); nothing in this arm
+  has been or will be adjusted to them. The Jev reference is not collected again; the analysis reads the one of 2026-10-12.
+- Available memory at the start about 48 GB of 64 (46.8 GB when the capacity probe was run).
+
+2026-10-13T04:14:11Z  end of collection and analysis for kev-0.8b
+
+- Run: 2026-10-13T02:16:29Z to 04:10:08Z, one pass of database/p7_run.sh --model kev-0.8b: sql 10.6 min, budget 2.0 min, cache 91.9 min
+  (29 runs), calibration 9.1 min. No interruption, no step repeated, no failed request, no out-of-memory retry. Analysis 04:10:27Z.
+  All files identical to their latest checksums above (verified again now). No paid call: the Jev reference of 2026-10-12 was reused.
+- Counts: sql 16,940 requests, all new, none unanswered. budget 4,716. cache 104,536 requests besides the warm-ups, none failed or
+  re-asked. calibration 12,671 distinct requests, 12,624 new, none unanswered. No replay (the model was not part of stage 6).
+- Conditions: the table runs on the short-text datasets held 1,884 (the whole movie table of 1,864 plus warm-up) and 1,900 texts
+  with the server at 43.4-43.7 GB. Available memory at the start of the runs 43 to 49 GB. Spread between repetitions +20.0% (movie),
+  +30.2% (mams), +29.4% (long): above the 15% flag on all three main datasets, flagged in the report; medians decide, as fixed.
+- Mechanism check: passed on all seven datasets.
+- Outcome by the lines fixed above (kev-0.8b):
+    A1  not met: average quality 0.6645 against the cheap LLM's 0.7451 (no unanswered row).
+    A2  not met: quality 0.100 below Jev's; the ten queries took 612.6 s (0.37 times the LLM's, 2.0 times Jev's).
+    B, long documents  met: later-question speedup 22.9 (repetitions 19.6, 22.9, 22.0); decisions identical on 100.00% of the
+        answers (probabilities identical to the last digit); the 40 documents need 3.4 GB against the budget of 41.2 GB.
+    B, whole short-text tables  not met: speedup 1.65 (movie, the whole table; repetitions 1.66, 1.62, 1.69) and 1.75 (mams;
+        2.08, 1.75, 1.76) against 2; the whole movie table fits (40.7 GB by the model, 40.5 GB measured, budget 41.2 GB) but the
+        whole MAMS table would need 86.3 GB; agreement 100.00% on both.
+    Sanity reading on the long documents: AUC 0.993, rank correlation 0.932, i.e. meaningful; longest request 6,520 tokens.
+    C   not met: abt-buy fails raw and calibrated (calibrated accuracy -3.2 points, AUC -0.022, Brier +0.023; the last two intervals
+        contain the bars); amazon-google fails raw and calibrated (AUC -0.038); dblp-acm fails raw and matches Jev when calibrated
+        (97.9% against 99.0%). walmart-amazon, also new to this model: fails raw and calibrated, all three differences near the bars.
+        Calibration changes accuracy by +12.2 to +29.6 points on the four test sets.
+  Memory model: 21.7 MB per cached text + 11.7 KB per token, R^2 0.9999. SQL against Python: no difference.
+- Expectations recorded before collection: held (misses A1 and line C on quality; its whole movie table fits and the MAMS table
+  does not; the whole-short-text-tables verdict fails).
+- Against the Jev reference on the long documents: kev-0.8b 0.78-0.85 s per document without the cache and 0.03-0.04 s on a cache
+  hit, Jev 0.34-0.37 s; three questions on the 40 documents 34.0 s with the cache against Jev's 48.8 s at concurrency 1.
+  Post hoc arithmetic, not part of the plan: with these timings the local cumulative time equals Jev's at the 2nd question and is
+  below it from the 3rd on.
+- Deviations in this arm: none during the run. As recorded above, it was collected after kev-4b had been analysed.
+- Cost of this arm: none.
+- Full tables: out/database/p7/kev-0.8b/report.txt and results.json; summary in database/README.md (section "Phase 7").

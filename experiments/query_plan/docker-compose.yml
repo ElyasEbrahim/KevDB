@@ -1,0 +1,39 @@
+# PostgreSQL for the query-plan experiment. It has its own project name, so the container, volume and network all carry the jev-query-plan prefix
+# and never touch other Docker projects on the machine. To remove all of it: docker compose -p jev-query-plan down -v
+name: jev-query-plan
+
+services:
+  db:
+    image: postgres:17
+    container_name: jev-query-plan-db
+    environment:
+      # a local-only test database, not real credentials
+      POSTGRES_USER: job
+      POSTGRES_PASSWORD: job
+      POSTGRES_DB: imdb
+    ports:
+      - "127.0.0.1:5434:5432"
+    shm_size: 1g
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./data:/data:ro
+    # Timing needs stability: no parallelism, no JIT, no genetic optimizer, and enough memory to keep the data cached
+    command: >
+      postgres
+      -c shared_buffers=8GB
+      -c effective_cache_size=24GB
+      -c work_mem=1GB
+      -c maintenance_work_mem=2GB
+      -c max_parallel_workers_per_gather=0
+      -c jit=off
+      -c geqo=off
+      -c max_wal_size=8GB
+      -c checkpoint_timeout=30min
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U job -d imdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

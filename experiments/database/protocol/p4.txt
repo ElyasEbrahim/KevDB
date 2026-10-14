@@ -1,0 +1,70 @@
+2026-10-07T06:06:12Z  written before the selectivity analysis was run
+
+Stage 4, part 1: can Jev supply the selectivity of a semantic predicate to a query optimizer? (replay of stage-2 judgments, no model calls)
+- Subsets: each movie with at least 30 distinct reviews in the 16,000-review set. They stand for "a relational filter was applied first".
+- Predicates: "the review is positive" (truth: scoreSentiment = POSITIVE) and its complement "the review is negative"
+  (truth: the other label; model answers are the complement of the answers to "positive" - not asked separately).
+- An estimate looks at n = 50 rows drawn without replacement from the subset (all rows if it has fewer), 200 draws per subset.
+- Estimators: constant 1/3 (PostgreSQL's default for a boolean function); Jev on the sample, share with p >= 0.5 (PRIMARY);
+  Jev on the sample, mean p; the LLM on the sample; human labels on the sample (the best any n-row sample can do); Jev on every row.
+- Metric: q-error = max(estimate / truth, truth / estimate), both floored at 0.5 / n.
+- Stop rule stated in the plan: if the median q-error of the primary estimator, over both predicates, exceeds 2, do not go on to plan ordering.
+0437639cef88a1a2d03e4fd126c315355587bf8cfe96607e2953554d5b15284d  exp/p4_selectivity.py
+
+2026-10-07T06:07:52Z  written before any MAMS judgment was collected
+
+Stage 4, part 2 pre-check on MAMS (3,949 restaurant-review sentences, 21 predicates = 7 aspects x {mention, negative, positive})
+- Prompts in exp/p4_collect.py are first drafts written from the category names only; they will not be edited after seeing results.
+- Question A (is there anything worth escalating to?): on a fixed 1,000-sentence sample, compare Jev (p >= 0.5) with the LLM chosen in
+  stage 0 against the human labels, per predicate, paired. Rule: the escalation / plan-ordering experiment is run with this LLM as the
+  upper tier only if its accuracy beats Jev's by at least 2 points averaged over the 21 predicates. Otherwise that is reported as
+  "no premise for escalation with this LLM" and the ordering study is limited to Jev-only execution.
+- Question B (does asking 21 questions in one Jev request change the answers?): per predicate, accuracy and decision agreement of
+  packed vs single requests on all sentences, plus input tokens and latency per sentence.
+- Question C (selectivity across many predicates): repeat the stage-4 part-1 analysis for all 21 predicates over the whole table and
+  over relational-style subsets, with the same primary estimator (Jev on a 50-row sample, share with p >= 0.5).
+2ba9ac176a3830528c0c0165f8803dbdc47a701916735f04a54e8713032d89fe  exp/p4_collect.py
+
+2026-10-07T06:37:14Z  written after questions A-C were answered and before anything below was collected or computed
+
+Outcome of the rules above: A gave +0.10 points (below 2) -> no escalation / ordering experiment with this LLM. C gave a median
+q-error of 2.10 against the human labels on MAMS (above 2). Both rules say: do not build the escalation-ordering experiment.
+What follows is the Jev-only study the rule allows, plus one new question that B raised.
+
+Question D (is "many questions in one request" specific to Jev, or can an LLM do it too?)
+- New collection on the same fixed 1,000 sentences: GPT 6 Luna (low reasoning) with all 21 questions in one request; DeepSeek V4.1 Flash
+  (thinking off, Together) one question per request and all 21 in one request. Same prompts.
+- Report per model: accuracy against the human labels packed vs single, agreement between the two, failed or incomplete answers,
+  latency per request, cost per sentence.
+- Reading fixed in advance: packing counts as "equally available to that LLM" only if its packed accuracy is within 1 point of its
+  single-question accuracy AND its packed request takes less than 3x the latency of one single-question request. Jev's own figures
+  from B are the comparison (99.5% agreement, same latency).
+- The DeepSeek single-question run also gives output probabilities on a second dataset: the stage-3 comparison of "Jev probability
+  vs open-model output probability" (AUC per predicate) is repeated on these 21 predicates.
+
+Jev-only ordering study (replay, no model calls)
+- Workload: every conjunction of 2 and of 3 distinct predicates out of the 21 (210 + 1,330 queries) over the 3,949 sentences.
+- Plans: one request per predicate per row, predicates evaluated in sequence with short-circuit, in (a) the worst order, (b) the best
+  order in hindsight, (c) the order chosen from Jev's pass rates on a 50-row sample (ascending pass rate); and (d) all predicates of the
+  query packed into one request per row.
+- Cost model from measured figures: input tokens per request = measured tokens for 1 question and for 21 questions, interpolated
+  linearly in the number of questions; pass rates are Jev's own decisions (p >= 0.5), conditional on the earlier predicates passing.
+- Report the distribution over queries of tokens(c) / tokens(b), tokens(a) / tokens(b) and tokens(d) / tokens(b), and the same for requests.
+a92ff4a8c9be93faba1ceea77e039abe055ac5636f761d8ca291e52610255deb  exp/p4_collect.py
+574d14ec45f5c26c70c4b868517690d60a4b1e517e481d799f3bf6621be7f7ef  src/jevsql/routes.py
+3a7507c5c4caa152abfa8e6929aa46ecee54e9bf3c3052b41d82ff5ce263423e  exp/p4_ordering.py
+
+2026-10-07T06:56:14Z  post hoc, written after question D was answered and before the replay below was computed
+
+D showed something not anticipated: with all 21 questions in one request the LLMs became MORE accurate against the human labels
+(Luna +3.8 points, DeepSeek +2.2), so the pre-set reading "within 1 point" is not met, but in the favourable direction; latency grew
+1.5-1.7x. Jev's answers did not change (99.5% agreement). Packed, the LLM now beats Jev by about 3.9 points, which is above the
+2-point bar of question A, although that bar was set for single-question accuracy. So one more replay, clearly post hoc:
+
+Row-level cascade with a packed upper tier (replay on the fixed 1,000 sentences, no model calls)
+- Every row gets Jev's packed answers. A share b of rows is escalated: those rows take the packed Luna answers for all 21 predicates.
+- Which rows: highest uncertainty first, uncertainty = sum over the 21 predicates of p * (1 - p) from Jev. Baseline: rows chosen at random
+  (mean of 200 draws). b in {0, 10, 20, 30, 50, 100}%.
+- Metric: accuracy against the human labels averaged over the 21 predicates (and mean F1). Cost per 1,000 sentences from measured costs.
+- Reading fixed now: the cascade is worth having if escalating 30% of rows recovers at least 60% of the gap between Jev and the LLM
+  (random escalation recovers 30% by construction).

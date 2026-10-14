@@ -1,0 +1,16 @@
+name: Feature or experiment proposal
+description: Suggest a new SQL function, backend or experiment.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What question or use case is not covered today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: For an experiment, include the question, the data, the metric and the threshold you would set before collecting anything.
