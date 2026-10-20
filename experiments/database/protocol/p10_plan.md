@@ -1,10 +1,11 @@
 # Phase 10 execution plan: does fine-tuning Kev on public record-matching data reach Jev's zero-shot level on unseen matching data?
 
 Drafted 2026-10-13.
-Status: the criteria are written ([p10.txt](p10.txt)) but not frozen; the download, data-building and training scripts
-are written and rehearsed on made-up rows; the evaluation and analysis scripts are not written yet.
-**The experiment starts only on the owner's instruction.** So far no real training record has been fed to a model, and
-no fine-tuned checkpoint has answered any evaluation data.
+Status (2026-10-20): done. The criteria in [p10.txt](p10.txt) were frozen on 2026-10-15 and the run took place from
+2026-10-16 to 2026-10-20 in the phases of section 6a, each started by the owner; every arm of both models was collected
+with no unanswered request. Results are in the "Phase 10" section of [../README.md](../README.md); the execution record,
+the deviations (among them the rule-8 fix for the training memory of 2026-10-17) and their evidence are at the end of
+p10.txt.
 
 This file is the runbook: what is done, in what order, the acceptance check of each step and how to handle mishaps.
 p10.txt prevails on the criteria.
@@ -147,8 +148,11 @@ most two. Both pass G.
 
 ## 6 Steps
 
-One command per model (`experiments/database/p10_run.sh --model <model>`, not yet written, see section 10), logging to
-`out/database/p10/<model>/run.log`.
+One command per model, `experiments/database/p10_run.sh --model <model> [--arms <arm>,<arm>]`, logging to
+`out/database/p10/<model>/run.log` (deviations to `deviations.txt`, training attempts to `training.tsv`, the inventory to
+`inventory.txt` next to it). It calls `p10_train.sh` for training, `p10_eval.py` for evaluation and checks, and
+`p10_report.py` for the analysis. `--arms` runs only some arms (one phase of the schedule below); the analysis runs only
+once every arm of the model is settled. Start it detached from any session (it must outlive the session that starts it).
 
 | Step | What | Acceptance |
 | --- | --- | --- |
@@ -159,7 +163,27 @@ One command per model (`experiments/database/p10_run.sh --model <model>`, not ye
 | 4 | inventory and analysis: `out/database/p10/<model>/report.txt` and `results.json` | |
 
 Training and evaluation alternate (each arm is evaluated right after training), so if the run stops midway the finished
-arms are complete. Only one training run or one server uses the GPU at a time.
+arms are complete. Only one training run or one server uses the GPU at a time. Arms run in the order loo-abt-buy,
+loo-amazon-google, loo-walmart-amazon, loo-dblp-acm, all, released. Each checkpoint is served on its own port (8015), and
+the evaluation stops if the server reports another run than the one asked for or a fine-tuned checkpoint reports a
+temperature other than 1.0 (kev.serve silently falls back to `runs/smoke` when a run has no `head.pt`).
+
+### 6a Schedule (the owner's decision of 2026-10-15)
+
+The run is split into phases; after each one the result is reported and the next starts only on the owner's
+instruction. Times are measured or estimated as in section 7 (±30%).
+
+| Phase | Command | What | Time |
+| --- | --- | --- | --- |
+| 0 | — | scripts, full rehearsal with failure drills, freezing p10.txt | done 2026-10-15 |
+| 1 | `p10_run.sh --model kev-0.8b` | Kev-0.8B, all six arms, analysis | about 10.4 h; done 2026-10-17 (stopped by the owner once, resumed) |
+| 2 | `p10_run.sh --model kev-4b --arms loo-abt-buy,loo-amazon-google` | two leave-one-out arms | about 11 h; done 2026-10-19 (memory guard stop, rule-8 fix, owner's pause) |
+| 3 | `p10_run.sh --model kev-4b --arms loo-walmart-amazon,loo-dblp-acm` | two leave-one-out arms | about 11 h; done 2026-10-19 |
+| 4 | `p10_run.sh --model kev-4b --arms all,released` | the all arm, the released arm, analysis | about 7 h; done 2026-10-20 |
+| 5 | — | README section, execution record in p10.txt, report | done 2026-10-20 |
+
+Phases 2 and 3 produce no readable result: by the rules of collection no answer is looked at until every arm of Kev-4B
+is collected. Stopping between phases costs nothing; stopping inside one loses the training run in progress.
 
 After the command finishes: check the inventory and read the report; add a "Phase 10" section to
 `experiments/database/README.md`; append an execution record to the end of p10.txt; report to the owner, conclusion
@@ -167,13 +191,14 @@ first.
 
 ## 7 Time and resources
 
-Measured in the rehearsal (made-up record pairs, final settings; M3 Max 64 GB, PyTorch MPS; results in
-`out/database/p10_rehearsal/feasibility.txt`):
+Measured in the rehearsals (made-up record pairs, final settings; M3 Max 64 GB, PyTorch MPS; the feasibility rehearsal
+of 2026-10-13 in `out/database/p10_rehearsal/feasibility.txt`, the full rehearsals of 2026-10-15 under
+`out/database/p10_rehearsal/`):
 
 | | Per training record | Peak process memory | Checkpoint size |
 | --- | --- | --- | --- |
-| Kev-0.8B | 0.8–1.0 s | under 9 GB | 62 MB |
-| Kev-4B | 2.4–2.5 s | about 26 GB | 148 MB |
+| Kev-0.8B | 0.8–1.0 s | under 9 GB (full rehearsal: 6.8–8.4 GB) | 62 MB |
+| Kev-4B | 2.4–2.75 s | about 26 GB (full rehearsal: 22.1–27.8 GB) | 148 MB |
 
 - Without gradient checkpointing Kev-4B grew to 84 GB within three minutes and was stopped; Kev-0.8B normally uses about
   10 GB but one record spiked it to 24 GB. So both models use it.
@@ -191,12 +216,30 @@ Time with 2,000 pairs per dataset and 2,000 replayed records, read as ±30%:
 | Training each of the four leave-one-out arms (8,000 records each) | about 1.8 h each | about 4.9 h each |
 | Training the all arm (10,000 records) | about 2.3 h | about 6.1 h |
 | Training in total | about 9.6 h | about 26 h |
-| Evaluation (about 63,000 / 52,000 requests) | about 1 h | about 2.6 h |
-| Total | about 10.5 h | about 28.5 h |
+| Evaluation (62,340 / 50,986 requests sent) | about 0.8 h | about 3.3 h |
+| Total | about 10.4 h | about 29.3 h |
+
+Evaluation, updated after the full rehearsal (2026-10-15). Requests per arm and set are counted on the real rows by
+`p10_eval.py plan` (no model call); the released arm sends only what is not in the caches of phases 6–8 (Kev-4B: only
+decision-v7's 1,112 distinct development requests; Kev-0.8B: the guards and the phase 8 readings, 11,466 requests, since
+phases 6 and 8 never asked it). Rates: the record-matching test and pool sets at the released checkpoints' own throughput
+in phase 7 (Kev-4B 4.1–5.7 requests/s, Kev-0.8B 20–26/s; in the rehearsal the fine-tuned checkpoints served at the same
+speed as the released ones); for Kev-4B the reviews at 8.2/s and the restaurant sentences at 13.1/s (phase 6), the phase 8
+pairs at 3.8–5.6/s and the single choice at 1.6/s (phase 8); decision-v7's development questions, which no earlier phase
+asked, at the rehearsal's 1.5/s (Kev-4B) and 8.5/s (Kev-0.8B), real questions with made-up states of the same length;
+Kev-0.8B's other sets at its rehearsal rates. Starting a server takes 12 s (Kev-4B) or 8 s (Kev-0.8B).
+
+| Evaluation per arm | Kev-0.8B | Kev-4B |
+| --- | --- | --- |
+| loo-abt-buy (with the phase 8 readings) | 9 min | 47 min |
+| loo-amazon-google, loo-walmart-amazon | 5 min each | 26 min each |
+| loo-dblp-acm (with the phase 8 reading) | 8 min | 38 min |
+| all | 10 min | 49 min |
+| released | 9 min | 12 min |
 
 Resources:
-- During training the process uses 9 GB (Kev-0.8B) or 26 GB (Kev-4B); evaluation as in earlier phases. A training process
-  above 44 GB is stopped by the script and handled under section 8.
+- During training the process uses 9 GB (Kev-0.8B) or up to 28 GB (Kev-4B); evaluation as in earlier phases. A training
+  process above 44 GB is stopped by the script's watchdog (footprint read every 5 s) and handled under section 8.
 - Mains power and an open lid are needed. Other GPU-heavy programs slow training noticeably.
 - Disk: the ten checkpoints take about 1.1 GB in `open_models/p10/` (not committed).
 - Cost: zero. The Jev column comes entirely from the cache.
@@ -205,7 +248,7 @@ Alternatives (to be decided before the start and recorded in p10.txt):
 
 | Option | Kev-0.8B | Kev-4B | Trade-off |
 | --- | --- | --- | --- |
-| Default: local, 2,000 pairs per dataset | about 10.5 h | about 28.5 h | long |
+| Default: local, 2,000 pairs per dataset (chosen: no other decision by the owner) | about 10.4 h | about 29.3 h | long |
 | Local, 1,000 pairs per dataset and 1,000 replayed | about 5.5 h | about 15.5 h | each leave-one-out arm has only 3,000 pairs, between the author's "no visible gain" (400) and "clear gain" (5,219); a failure would be hard to interpret |
 | Kev-4B trained on a rented GPU | | roughly twenty minutes per training run | paid, needs the owner's own Modal account; public data and Kev's code have to be uploaded; training precision becomes the released recipe's bf16. The speed is scaled from the author's own numbers and the price is unverified; if chosen, check the price first |
 
@@ -254,14 +297,12 @@ Done (no real training record was used for training, and no fine-tuned checkpoin
 | Training rehearsal | each model trained once on 72 made-up record pairs plus 16 replayed records with the final settings; speed and memory in section 7 |
 | Serving rehearsal | both fine-tuned checkpoints load in the server used in phases 6–8 and answer; their own temperature is 1.0 |
 | Problems the rehearsal caught | without gradient checkpointing Kev-4B's memory exceeds physical memory; phase 7's label-pool ordering key differed from the first draft here (now copied from phase 7, with a test) |
+| Evaluation, analysis and run scripts (2026-10-15) | `p10_eval.py` (request sets, serving, replay of the released checkpoint, checkpoint checks, verification, inventory), `p10_report.py` (temperature, lines T and G, readings, bootstrap), `p10_run.sh` (pre-flight checks, train-then-evaluate per arm, memory watchdog, resume, inventory, analysis); 23 more offline tests (`tests/test_p10_eval.py`), 100 in the repository, all pass |
+| Real request sets counted (no model call) | Kev-0.8B sends 62,340 requests, Kev-4B 50,986; the released Kev-4B's answers are all in the caches of phases 6–8 except g3's 1,112 |
+| Full rehearsal (2026-10-15) | two rounds from empty directories, both models; Kev-0.8B with four drills (training killed, server killed, memory watchdog, whole run killed and restarted), each handled by its rule and visible in the inventory; Kev-4B clean; results and the problems found are in p10.txt's block of 2026-10-15 |
+| Frozen | checksums of the scripts, the inputs, the five built training files and the four label pools appended to p10.txt; the built files' checksums are also in `p10_eval.py` and checked before every run |
 
-Still to do before the start (free, without touching real data):
-
-1. Write the evaluation script (start each checkpoint's server, ask, store, fit the temperature, the three guard sets,
-   the secondary readings), the analysis script and the one-command `p10_run.sh`, with offline tests.
-2. Rehearse the whole run on made-up rows from an empty directory, including failure drills (killing training midway,
-   killing the server during collection) and the memory watchdog.
-3. Append these scripts' checksums and the rehearsal results to p10.txt and freeze it. Only then can the run start.
+Nothing is left to do before the start. The next step is phase 1 of section 6a, on the owner's word.
 
 ## 11 Risks
 
@@ -275,13 +316,13 @@ Still to do before the start (free, without touching real data):
 | Long training | an interruption costs at most about 6 hours | evaluate each arm right after training; start detached from the session; rules 2 and 7 |
 | Local training in full precision, while the released recipe uses bf16 on a GPU | small numerical differences from the author's path | listed as a limitation; the evaluation path is identical to earlier phases |
 | The guard checks only three sets | forgetting on other tasks goes unseen | listed as a limitation; g3 is Kev's own evaluation set |
-| The evaluation script is not written yet | the evaluation part of the time estimate is scaled from earlier phases' throughput | update this section after the full rehearsal |
+| Decision-v7's development questions were never asked of these models before | the guard g3 takes most of an arm's evaluation for Kev-4B (about 12 min) and its rate is from made-up states | measured in the rehearsal with the real questions; section 7 updated |
+| A fine-tuned checkpoint separates its pool labels perfectly | the maximum-likelihood temperature has no finite value | Kev's own grid (0.25–4) is used; a temperature at the grid's end is flagged in the report |
 
-## 12 Open decisions
+## 12 Decisions
 
-1. **Training size and place.** The default is local with 2,000 pairs per dataset, about 39 hours for both models. The
-   other two options are in section 7.
-2. **Order.** By default Kev-0.8B first (about 10.5 hours, one night), then Kev-4B (about 28.5 hours); either can also run
-   alone. Kev-4B is the more likely to reach Jev's level and so the more important one; Kev-0.8B is cheap and suits a first
-   pass of the whole process on real data.
-3. **Whether to finish the three remaining items of section 10 now**, so that the run can start as soon as the owner says go.
+Taken by the owner on 2026-10-15 (recorded in p10.txt):
+
+1. **Training size and place:** unchanged, local with 2,000 pairs per dataset, about 40 hours for both models.
+2. **Order:** in phases (section 6a), Kev-0.8B first, then Kev-4B in three phases; each phase starts on the owner's word.
+3. **The remaining items of section 10:** done in phase 0.

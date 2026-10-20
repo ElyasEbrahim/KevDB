@@ -97,6 +97,10 @@ Practical guidance from the experiments:
 - **For semantic joins, use `kev_match` plus a one-to-one constraint in SQL** (keep each left record's best candidate at
   ≥ 0.5). Do not use `kev_pick` on Kev-4B: its multiple choice favours later options.
 - **Verify packing per predicate.** Packing several questions into one request changes answers for some predicates.
+- **Fine-tune Kev-4B for product matching if you have public or own labels** ([phase 10](../experiments/database/README.md#phase-10-does-fine-tuning-on-public-matching-data-bring-kev-to-jevs-zero-shot-level)).
+  6,000 human-labelled pairs from three other product and publication datasets brought it to Jev's zero-shot level on two
+  of four unseen datasets, mostly by removing false matches, without forgetting its other tasks. It does not help for a
+  matching task asked with a question that never appeared in training, and Kev-0.8B forgets slightly.
 
 ## Troubleshooting
 
@@ -105,3 +109,6 @@ Practical guidance from the experiments:
 - *Connection refused from `kevdb`*: start the server first; local backends do not start servers themselves.
 - *Memory pressure with a large prefix cache*: lower `KEV_PREFIX_CACHE`; read the process's real memory with
   `footprint -f bytes <pid>` (`ps` does not include GPU memory under MLX).
+- *`kev.train`'s memory keeps growing on a Mac*: every new input length gets its own compiled GPU kernels. Train through
+  `experiments/database/p10_kev_train.py kev.train ...`, which applies Kev's own padding to multiples of 64 tokens during
+  training too; on phase 10's runs memory then stayed flat (Kev-4B 28–32 GiB instead of passing 41 GiB).

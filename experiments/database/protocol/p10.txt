@@ -135,3 +135,145 @@ c1370966c08c246e9cf844b7cd2cf580b2559e9831f1eb3cca560fd53c1bcbb2  entity_match/d
 092fccd11c1cc1ffe54a702af276641218ce9506e6d60fb5a29a3c67d87892c3  entity_match/data/walmart-amazon/train.txt
 4f757d2d5dae4f7d7d118b796c683a232b4e11bf000e2012b64f8af95a981a4e  entity_match/data/dblp-acm/train.txt
 7ed5254b5cb5291baefaceb09edf7e13110258211518c8038f4a12c11bd628ad  open_models/kev/evals/v7/decision-v7/train.jsonl
+
+2026-10-15T12:19:59Z  Before the run: the evaluation and analysis scripts, the one-command run, a full rehearsal with failure drills, and the owner's decisions. Written before any real training pair was given to a model and before any fine-tuned checkpoint was asked about any evaluation row. With this block the standard is frozen: nothing above it changes, and the run starts on the owner's word.
+
+Decisions (the owner, 2026-10-15)
+- The run is split into phases, each started by the owner after the previous one has been reported: 0 preparation (this block); 1 Kev-0.8B, every arm and the analysis; 2 Kev-4B loo-abt-buy and loo-amazon-google; 3 Kev-4B loo-walmart-amazon and loo-dblp-acm; 4 Kev-4B all, released and the analysis; 5 write-up. Between Kev-4B's phases no answer is looked at (rules of collection above).
+- Training size and place: unchanged, 2,000 pairs per dataset, 2,000 replayed records, on this Mac. Kev-0.8B first.
+
+Paths. On 2026-10-14 the repository was reorganised (database/ -> experiments/database/, entity_match/ -> experiments/entity_match/, database/open_models.sh -> scripts/open_models.sh) and its scripts and documents translated into English, with code logic, questions and cache keys unchanged. The checksums above name the old paths. The four training splits and decision-v7's training part are byte-identical to the checksums above; p10_data.py, p10_train.sh, p10_fetch.sh, tests/test_p10.py and entity_match/run.py changed by the translation only (new checksums below), and the rehearsal training files they build are byte-identical to those built on 2026-10-13.
+
+How the method above is carried out (fixed now, before any real pair or answer; where it narrows a sentence above, the reason is given)
+- Temperature: "fitted by maximum likelihood, following the author's recipe" is the author's own fit (kev/metrics.py TEMPERATURE_FIT, used for the released checkpoints): the minimum mean negative log likelihood over a 121-point log grid from 0.25 to 4, on the served p clipped to [5e-5, 1 - 5e-5] (half the server's 4-decimal rounding step). The full rehearsal showed why the grid matters: a checkpoint that separates its pool labels perfectly has no finite maximum-likelihood temperature (an unbounded fit ran to T -> 0). A temperature at the end of the grid is flagged in the report.
+- The released checkpoint's answers are replayed from the caches of phases 6-8, opened read-only; only what is not there is asked (counted on the real rows without asking anything: Kev-4B has every request except the 1,112 distinct development requests of g3; Kev-0.8B has only the test and pool requests of phase 7, so its g1, g2, g3, end-to-end and option-order requests are asked now). The name of a question is not part of what Kev reads (kev/api.py to_record keeps only instructions and options), so phase 7's requests through the SQL functions (one question named "q") are the same requests as this phase's (named "same"); the replay maps the names.
+- g1 = the first 1,000 of phase 6's 5,000 review texts, scored per labelled review row as phase 6 scored them. g3 is scored per question (1,468); its 1,204 records contain 1,112 distinct requests, each asked once and scored once per record.
+- A reading added, without a line: the released checkpoint with a temperature fitted the same way on the same pool labels as each loo arm, to show how much of a Brier change a temperature alone gives.
+- Serving: each checkpoint on port 8015 with scripts/open_models.sh's environment, sandboxed, factory settings, concurrency 16. Nothing is asked if the server reports another run than the one requested (kev.serve silently falls back to runs/smoke when a run directory has no head.pt), if a fine-tuned checkpoint reports a temperature other than 1.0, or if its prefix cache is not at the factory size. Answers are cached under the arm's name plus a digest of its weights, so a retrained checkpoint never inherits an earlier one's answers.
+- A checkpoint counts if its files are complete, its log has the wrapper's end line and the trainer's "saved" line, no record was dropped, truncated or rejected, and the trainer saw exactly the arm's records plus the 2,000 replayed (rule 3; a non-finite loss stops kev.train before it saves).
+- Rules 2 and 7 in the script: a training run that fails or is stopped by the memory watchdog (footprint read every 5 s, 44 GB) is set aside, never deleted, and trained once more from the beginning; a second failure makes the arm missing. An unfinished run left by an interrupted invocation is set aside and trained again from the beginning. Rule 4: an evaluation step whose server does not start, answers as the wrong checkpoint or exits is done once more with a new server, the answers already given coming from the cache; a second failure makes the arm missing. The analysis runs once every arm is complete or missing for good.
+
+Scripts and inputs (sha256), frozen with this block
+16b143a43494936ef404ae6382729608a70d1808ba0151154b50e6a744fa09f1  experiments/database/p10_eval.py
+22bac7b35f2b85051ffee77126b7376a5adcf435e90d4d0687f0099b063cd83e  experiments/database/p10_report.py
+4f83216fd59161e1915b1b7a1d32a1d15b3a4b3ca2c93d958caf47f5b18ccece  experiments/database/p10_run.sh
+b2d01559448a3d0e18e7b77ffc180f373733513418223a08cdb030c44a3ef5fa  experiments/database/p10_data.py
+96fab1ea752e189e8167d3e2d0d9f98822034f5d0a940242d480e92b775d3522  experiments/database/p10_train.sh
+9a8dd356bc36bf01ba7652879a32ceb209a63b4b21d0cdbe6e2b0289fef3ba56  experiments/database/p10_fetch.sh
+c7719c20738374cf6aad56959768b9ef12aa40d39dced1ff7873848951557202  tests/test_p10.py
+eff5057b3d575fbea442b1dce192994b5ea7b228c1a53cda57896904b27bc5dc  tests/test_p10_eval.py
+069f074a13f9893ff00358168ac9a911ae9d0860339ff215466d95f403ff1604  experiments/entity_match/run.py
+b8ba3b1b00869cbf065fe8846cd8b04e50d7683a2862beac8fb6b92cbb7a3fda  experiments/database/p8_join.py
+d3637bf7ef9c421ea4a1eecaeebdb192b7a007bc62afad994a17bafb904b496c  experiments/table_match/pipeline.py
+8afbbeb0899ac35867e6ac28dd6740064d4514eac83b2183b364669cc4912023  experiments/database/p6_collect.py
+3d237865b0dc34f3d45613847a0cf765d2bbf0a49d796cadbf25a68f740a4f07  experiments/database/p4_collect.py
+329053189bd9e60f5e6731d5042da88276407f870e5ee65eecf92b5c42b1f54b  experiments/database/p2_collect.py
+cad71aedc289d72e0bd6b9dcede9113ebde4891b44e3fc8e0e3c0f058df1b2bb  experiments/database/p3_aggregates.py
+8a81c21d24cd0b26a1051e1bf5886ddbeb0fa6e552d5b108ef7c286deb9ccb82  scripts/open_models.sh
+1030f5c544d79c74b26e9d3bf6c71157e52eed915f5db613bcbe267e3a4e48ac  src/kevdb/engine.py
+bac5a3c890c0c72b5e061e2e4f12293bb0c1bbbd6e96f97c9d523ce87319c0de  src/kevdb/open_models.py
+9cac22b9b074862caa3ae34b8ec44ab4e3fb71f67f21f0b0902e4a33ba300482  src/kevdb/client.py
+c2ea4fef1ef1f9f59422606e1af2fe5cd26608cf032d87ab777afe4d6d36c77c  src/kevdb/cache.py
+c1370966c08c246e9cf844b7cd2cf580b2559e9831f1eb3cca560fd53c1bcbb2  experiments/entity_match/data/abt-buy/train.txt
+84ef5f7747296990a3775d2c8774949e720df643106b1b447682265f41929b26  experiments/entity_match/data/amazon-google/train.txt
+092fccd11c1cc1ffe54a702af276641218ce9506e6d60fb5a29a3c67d87892c3  experiments/entity_match/data/walmart-amazon/train.txt
+4f757d2d5dae4f7d7d118b796c683a232b4e11bf000e2012b64f8af95a981a4e  experiments/entity_match/data/dblp-acm/train.txt
+7ed5254b5cb5291baefaceb09edf7e13110258211518c8038f4a12c11bd628ad  open_models/kev/evals/v7/decision-v7/train.jsonl
+8d5765d7aec4d08c61854f4664ca79ec2ba44ed092e9b967eaf61ed86c496d9c  open_models/kev/evals/v7/decision-v7/development.jsonl
+Built from them (p10_data.py build / pools; records, sha256; the same numbers are frozen in p10_eval.py and checked before every run):
+71ee73a9492c568ffdc0aa7c831455f121e201d11d2f954bade9218112636689  out/database/p10/train/all.jsonl  8000 records
+08e8693c27bf089c1bddbce57f972f0ec7e06b68550828c87a5935bff82913f3  out/database/p10/train/loo-abt-buy.jsonl  6000 records
+15161f3dae3e7d1d32729d923ae1d0d032e86c1a2d96f6f112f824707225a236  out/database/p10/train/loo-amazon-google.jsonl  6000 records
+4b7927c9d50b0474c5a408b443348ce19eefca2d205bfeb29060ea9ba1ba46a8  out/database/p10/train/loo-dblp-acm.jsonl  6000 records
+beacb5811c8717ca5d4b28e521844af28c1e539bdda77fd8400302189c37855e  out/database/p10/train/loo-walmart-amazon.jsonl  6000 records
+680e99142956a652d32bd8eddee4d17851c56bcd666f40917336c836f78e2b8a  out/database/p10/pool/abt-buy.jsonl  200 records
+01f6c5dc215904012101f19b21a7ed0c9f8dc3511d141f0b52a3be1182c6c85b  out/database/p10/pool/amazon-google.jsonl  200 records
+cd743fdb29b36c67c9d98488c76fc6577c9e06ebd530d26c01932ee243551860  out/database/p10/pool/dblp-acm.jsonl  200 records
+f1be3c88aa5e7ce64a069d152f369248bf7815dba78c8eb434e3ce229a84d58c  out/database/p10/pool/walmart-amazon.jsonl  200 records
+Comparison and replay inputs, read only:
+df323df317af4ca33132e3c3a666983c5cbc69ef517f61df18f381b4d1662352  experiments/entity_match/data/abt-buy/test.txt
+fb4a50692f296435d9ecd4b310acc1318ff7d6d1e13924f0b211d1f906dacbef  experiments/entity_match/data/amazon-google/test.txt
+85ee132c4e45073a4b5ab8168d5db8af3e354b7b46dae19fd111757c0a6a97f6  experiments/entity_match/data/walmart-amazon/test.txt
+ded891e469b1d08e21269038c984dc761ae2fd5b142b00c46c30fce45adc6e68  experiments/entity_match/data/dblp-acm/test.txt
+14b2c80673434b852febacd1a741c89e2ca0aba1658f4420efe4cbb46f4ef607  experiments/entity_match/data/abt-buy/valid.txt
+baa53c43706e979441aaf653698bb477294b6fa16328fd272fcdc56ca040c094  experiments/entity_match/data/amazon-google/valid.txt
+4b07b12d5eb411736da03385d7543a34c77e5d9d364c25d67e987ebabc58c92c  experiments/entity_match/data/walmart-amazon/valid.txt
+b13444a2bf1a503ed558e782f42b247cf56e16e67be2e58d92d7435161299e2e  experiments/entity_match/data/dblp-acm/valid.txt
+28cf9607085de21f225a5bbae4d6cf1efa0fb82d1235e475c10d76a981ef001e  out/entity_match/abt-buy.test.jev-1.13.0.jsonl
+88c3fedd4978ad51d1471dd5bf36d4dc37179329f3b4d5bcc02681b697f20064  out/entity_match/amazon-google.test.jev-1.13.0.jsonl
+3630643d9d3f828c7709acf766c88355187a6536d3850fafb83475322af4380d  out/entity_match/walmart-amazon.test.jev-1.13.0.jsonl
+43cfd89209ebdf820357c62317a12f05b0b70bec52ac86da215ce9dc0af6a44e  out/entity_match/dblp-acm.test.jev-1.13.0.jsonl
+26b1ee1929c96ef1646c19e29c85c8d56c813fcbf88f6681f01586452ef41efd  out/database/p8/jev/abt-buy.pair.rank.sub.k10.jsonl
+306061464f313b105c3fbd2d3f3b3da62787362bc2aa09cf9fd32c001c4c13bd  out/database/p8/jev/dblp-scholar.pair.rank.sub.k10.jsonl
+f6d2c4de001309fc5bef75fcb38313c02828d3f72cf3002d0ee72c6d3c2d32df  out/database/p7/kev-4b/cache.sqlite
+7e8988d4e7bf417e8d649972cbd4560d5938c482136954c64f3af481c010b24d  out/database/p7/kev-0.8b/cache.sqlite
+af4ec7a318d6d2af8512668aecf618fb4ee9700cfd08205594f0efa057ff25af  out/database/p6/cache.kev-4b.sqlite
+ac8aaa9b1659bfb1407160a6f69c7983890bf07b0d22a2dcdb040f044eaeda85  out/database/p8/cache.kev-4b.sqlite
+
+Full rehearsal (2026-10-15; made-up rows only, real questions; results in out/database/p10_rehearsal/, checkpoints in open_models/p10_rehearsal/; the feasibility rehearsal's files of 2026-10-13 were moved, not deleted, into feasibility/ so that both rounds started from empty directories)
+- Round 1, both models, found the problems listed below; they were fixed and round 2 ran both models again from empty directories with the final scripts (round 1's files are kept in round1/).
+- Kev-0.8B, round 2, with four failure drills; every one handled by its rule and visible in the inventory and deviations.txt:
+    A  the training process of loo-amazon-google killed mid-run -> rule 2: set aside, attempt 2 complete;
+    B  the server of loo-walmart-amazon killed during g2 -> rule 4: a new server finished the step, the answers already given came from the cache;
+    C  the watchdog, lowered to 1 GB for loo-dblp-acm's first attempt (rehearsal only, P10_DRILL_WATCHDOG_ARM), stopped it at 4.4 GB -> rule 2: attempt 2 complete;
+    D  the whole run (its process group) killed during the training of all, then the same command started again -> rule 7: the four finished arms were neither
+       retrained nor asked again, all's unfinished run was set aside and trained from the beginning, then released, the inventory (6 of 6 arms complete) and
+       the analysis. 14 minutes including the drills.
+- Kev-4B, round 2, clean: 6 of 6 arms, no deviation, 31 minutes; the released arm replayed 524 of its 842 rehearsal requests from the rehearsal caches of phases 6 and 8 and asked 318. Every rehearsal checkpoint separated its made-up pool labels perfectly, so each temperature ended at the grid's lower end (0.25), flagged in the report.
+- Problems the rehearsal caught and fixed (none touches training data, a request or a recorded answer): the unbounded temperature fit ran to T -> 0 on perfectly separated pool labels (now the author's grid, see above); after a killed server every queued request logged an "exception was never retrieved" traceback and the deviation line read "HTTP 0: ..." (now one plain line); a training run cut short by an interrupted invocation left no row in training.tsv (now one row "interrupted"); the rehearsal's g3 took the first 30 development records, which are all one 77-option choice question (now 10 records of each question type). Also caught while writing, before the rehearsal: kev.serve's silent fallback to runs/smoke (now checked), and a dead server would have let thousands of queued requests run into retries (now the step stops at once).
+- Measured: training per record 0.85-0.99 s (Kev-0.8B) and 2.41-2.75 s (Kev-4B), as on 2026-10-13; peak footprint 6.8-8.4 GB and 22.1-27.8 GB; a server starts in 8 s and 10-12 s; fine-tuned checkpoints serve at the released ones' speed. Evaluation times in p10_plan.md section 7, re-estimated on the real request counts: Kev-0.8B about 0.8 h (was 1 h), Kev-4B about 3.3 h (was 2.6 h); totals about 10.4 h and 29.3 h.
+
+Not done before the start: no real training pair was given to a model and no fine-tuned checkpoint was asked about any evaluation row. The real training files and label pools were built (no model involved) so that their checksums could be frozen; the real request sets were counted and the released checkpoint's earlier answers were checked for presence only, none read.
+
+2026-10-16T04:51:35Z  Phase 1 started on the owner's word ("start phase 1 !"): ./experiments/database/p10_run.sh --model kev-0.8b, launched detached. Before the launch the 26 frozen scripts and inputs matched their checksums above; the run's own pre-flight checks passed (offline tests, mains power, 41 GB of memory available, port 8015 free) and the five training files and four label pools matched the frozen ones.
+
+2026-10-16T14:02:00Z  Phase 1 stopped on the owner's instruction (option 2 of three offered: stop now, losing the training in progress) while all was training (step 910 of 1,250 of its first attempt). By then loo-abt-buy, loo-amazon-google, loo-walmart-amazon and loo-dblp-acm were trained and evaluated, with no deviation. Rule 7 applies: the same command resumes, all is trained again from the beginning, then released and the analysis. Observed during the run (memory only, no answer looked at): the training process's host memory grows over a long run; the four 8,000-record arms peaked at 38.9-40.5 GB by the watchdog's 5-second readings (the trainer's own peak_rss 34.2-36.9 GB; device memory 3.3 GB), against 6.8-8.4 GB in the 88-record rehearsal; all was at about 33 GB at step 750.
+
+2026-10-17T01:33:51Z  The owner (2026-10-17): continue Phase 1 now and then start Phase 2 automatically, unattended, so that a shutdown of the assistant cannot stop it. Done by out/database/p10/chain_phase1_phase2.sh (outside the frozen scripts; it runs the frozen command for each phase unchanged): Phase 1's same command, then, only once every Kev-0.8B arm is settled, Phase 2's command. During Phase 2 the chain watches the training footprint and stops the whole run at 41 GB, as an interruption under rule 7, before the run's own 44 GB watchdog would count a failed attempt (rule 2) and, at the second, make the arm missing for good: Kev-0.8B's 8,000-record runs reached 38.9-40.5 GB, and Kev-4B starts at 22-28 GB. Phase 1 keeps the frozen rules unchanged.
+
+2026-10-17T04:03:32Z  Phase 1 finished (resumed by the unattended chain the owner asked for on 2026-10-17); every Kev-0.8B arm settled, see out/database/p10/kev-0.8b/inventory.txt and report.txt.
+
+2026-10-17T04:03:52Z  Phase 2 started by the unattended chain (the owner's instruction of 2026-10-17): ./experiments/database/p10_run.sh --model kev-4b --arms loo-abt-buy,loo-amazon-google, with the chain's memory guard at 41 GB (stops the whole run as an interruption, rule 7, before the run's 44 GB watchdog would count a failed training run).
+
+2026-10-17T05:21:59Z  Phase 2 stopped by the chain's memory guard (training footprint above 41 GB, below the 44 GB watchdog): an interruption under rule 7, no arm counted as failed. Waiting for the owner's decision.
+
+2026-10-17T11:47:18Z  Rule 8 (a fault that touches no training data, request or recorded answer), carried out with the owner's agreement ("option 1, try to fix the memory growth") before Phase 2 is run again: training goes through experiments/database/p10_kev_train.py, which is kev.train unchanged except that Kev's own MPS shape bucketing (kev.model DecisionModel._pad_rows: rows right-padded to a multiple of 64 tokens with the pad token, position 0 and attention mask 0; until now applied in eval mode only) is applied in training too.
+- Why: on Apple GPUs each new input shape keeps its own compiled kernels for the life of the process, so an unpadded training run's memory grows with the number of distinct row shapes it meets. Measured on made-up rows only (experiments/database/p10_memprobe.sh, results in out/database/p10_probe/): Kev-0.8B on 640 copies of one record 4.5 -> 4.6 GB; on 640 distinct records 5.5 -> 6.8 GB; on those plus 640 replayed decision-v7 records 11.5 -> 22.5 GB by step 130 unpadded, 7.2-7.7 GB padded; Kev-4B padded on 320 made-up plus 320 replayed records 19.7-23.6 GB with no upward trend (unpadded, Phase 2's real run went from 25 to 43.6 GB in 2,160 records).
+- Effect on training: with LoRA dropout switched off (probe only), padded and unpadded runs gave the same losses and weights within 2.2e-4 of the size of the fine-tuning update (largest difference 1.1e-5), i.e. floating-point rounding; two unpadded runs repeat bit for bit. With the recipe's LoRA dropout of 0.05 the padded tensors draw their dropout masks differently, so a padded run is another random draw of the same procedure (weights 12% of the update apart after 160 steps), not another procedure. Checked against Kev's code: for rows of 3, 70 and 128 tokens the launcher gives tensors identical to Kev's eval-mode bucketing; off MPS and in eval mode nothing changes. Speed: Kev-0.8B 0.74 s per record padded against 0.88 unpadded on the same rows.
+- Scope: Phase 1's Kev-0.8B arms were trained unpadded (each stayed under the watchdog and counts); every training run from Phase 2 on is padded, so the two models also differ in the random draw of their dropout masks. Kev-4B's interrupted loo-abt-buy attempt is set aside under rule 7 and trained again from the beginning. The unattended chain keeps its 41 GB guard as a safety net.
+- Caught while making the change: p10_run.sh's watchdog and pre-flight check find the training process by "kev.train" in its command line, so the launcher takes the module name as its first argument (p10_kev_train.py kev.train ...); checked on a made-up run through the changed p10_train.sh (the watchdog's pattern found the process; 88 records trained, none dropped, saved).
+- Checksums (sha256), replacing those above for these files:
+  6af7ba0abcdad55efc7fd6dd6577aa5d055378592fe11f966e514c3ee9a74898  experiments/database/p10_train.sh
+  2fce1473d5e94e9ef59658450e9526d0940aa5450dd400ea8661739a4ef17650  experiments/database/p10_kev_train.py
+  c94a2192520efcc81605220c05184688895f93adcd23ac233611d0901e26cc24  experiments/database/p10_memprobe.sh
+  ca3c8b31b0c0e6de1aa04cd27e254df35c5ef32c3fe0b5f599c741cbd67b3687  tests/test_p10_bucketing.py
+
+2026-10-17T11:47:36Z  Phase 2 started again by the unattended chain after the rule-8 fix (the owner's instructions of 2026-10-17): ./experiments/database/p10_run.sh --model kev-4b --arms loo-abt-buy,loo-amazon-google, with the chain's memory guard at 41 GB (stops the whole run as an interruption, rule 7, before the run's 44 GB watchdog would count a failed training run).
+
+2026-10-17T15:03:32Z  Phase 2 paused on the owner's instruction (the owner needs the Mac for other heavy software): the run's and the chain's process groups (93393, 93383) were frozen with SIGSTOP while loo-abt-buy was training (step 680 of 1,000 of its first attempt). Nothing was stopped or restarted: on resume the same processes continue the same computation, so no rule of section 8 applies; the arm's recorded training time will include the pause.
+
+2026-10-19T04:38:23Z  Phase 2 resumed on the owner's word: process groups 93393 and 93383 continued (SIGCONT).
+
+2026-10-19T12:24:50Z  Phase 2's run ended (see out/database/p10/kev-4b/inventory.txt).
+
+2026-10-19T12:33:25Z  Phase 3 started by an unattended chain on the owner's word ("start phase 3!"): ./experiments/database/p10_run.sh --model kev-4b --arms loo-walmart-amazon,loo-dblp-acm, with the chain's memory guard at 41 GB (stops the whole run as an interruption, rule 7, before the run's 44 GB watchdog would count a failed training run).
+
+2026-10-19T23:27:41Z  Phase 3's run ended (see out/database/p10/kev-4b/inventory.txt).
+
+2026-10-20T01:53:10Z  Phase 4 started by an unattended chain on the owner's word ("start phase 4!"): ./experiments/database/p10_run.sh --model kev-4b --arms all,released, with the chain's memory guard at 41 GB (stops the whole run as an interruption, rule 7, before the run's 44 GB watchdog would count a failed training run).
+
+2026-10-20T08:54:57Z  Phase 4's run ended (see out/database/p10/kev-4b/inventory.txt).
+
+2026-10-20T10:56:45Z  Execution record (phase 5 of the schedule, written after both models' analyses had run).
+Timeline (UTC):
+- Phase 1, Kev-0.8B: started 2026-10-16T04:51:35Z; stopped by the owner 14:02:00Z during the training of all (rule 7); resumed by the unattended chain 2026-10-17T01:34:05Z (the four finished arms kept, all trained again from the beginning); analysis 04:03:29Z. Training 6,195-6,620 s per leave-one-out arm and 7,899 s for all; peak footprint 38.9-40.5 GiB and 42.7 GiB, unpadded.
+- Phase 2, Kev-4B loo-abt-buy and loo-amazon-google: first start 2026-10-17T04:03:59Z, stopped by the chain's 41 GiB guard at 05:21:49Z (loo-abt-buy, step 270 of 1,000); rule-8 fix (block of 2026-10-17 above); restarted 11:47:43Z with padded training; paused by the owner 15:03:32Z at step 680 and resumed 2026-10-19T04:38:23Z; ended 12:24:48Z. loo-abt-buy's recorded 152,669 s of training include the 135,291-second pause (17,378 s of computation); loo-amazon-google 18,888 s. Peaks 30.1 and 31.4 GiB.
+- Phase 3, loo-walmart-amazon and loo-dblp-acm: 2026-10-19T12:33:32Z to 23:27:38Z; 17,962 s and 18,373 s; peaks 28.3 and 28.6 GiB.
+- Phase 4, all and released, then the analysis: 2026-10-20T01:53:17Z to 08:54:56Z; all 22,309 s, peak 32.2 GiB; the released checkpoint answered from the caches of phases 6-8 except g3's 1,112 requests.
+Requests: Kev-0.8B 71,820 (62,330 sent, 9,470 from phase 7's cache), Kev-4B 71,820 (50,976 sent, 20,824 from the caches of phases 6-8). No request was left without an answer (rule 5 never used beyond the first pass), every arm of both models had one server start and no server failure (rule 4 not used in the run), and no arm is missing.
+Analysis: the frozen experiments/database/p10_report.py (sha256 22bac7b35f2b85051ffee77126b7376a5adcf435e90d4d0687f0099b063cd83e), unchanged since 2026-10-15; reports out/database/p10/<model>/report.txt and results.json. Nothing was added to it, and no reading after the fact is reported.
+Verdicts:
+- Kev-4B: 2 of 4. On par with Jev, guard met: abt-buy, walmart-amazon. Below: amazon-google (accuracy -2.2 points, interval -3.1 to -1.4 contains the line; Brier +0.028), dblp-acm (accuracy -6.8, Brier +0.051; F1 unchanged from the released checkpoint, 0.742). The guard is met by every checkpoint.
+- Kev-0.8B: 1 of 4. On par with Jev, guard met: walmart-amazon (movie reviews -2.0 points, at the line by one judgement of 1,001). dblp-acm meets T but fails the guard (movie reviews -2.3). Below: abt-buy (accuracy -3.6, Brier +0.031), amazon-google (AUC -0.021, interval contains the line). Movie-review accuracy falls 2.0-2.4 points in every Kev-0.8B checkpoint.
+- Against "What I expect" above: Kev-4B met T on exactly abt-buy and walmart-amazon and missed the two marked open; it improved on the three product folds but not on dblp-acm. Kev-0.8B improved on all four and met T on two; the expectation that G is met everywhere was wrong for Kev-0.8B.
+Correction of a unit in the block of 2026-10-17 above: "Phase 2's real run went from 25 to 43.6 GB" reads megabytes as reported by the run's log divided by 1,000; the value is 43,622 MiB = 42.6 GiB. The 41 and 44 limits are GiB, so nothing that depends on a limit changes.

@@ -6,7 +6,7 @@ functions for semantic predicates, and their probabilities used as "semantic sta
 Phases 0–5 use the hosted Jev API (TypeSafe AI's decision model, which answers yes/no, multiple-choice and score
 questions with probabilities) and generative LLMs. From phase 6 on the subject is the open, Jev-compatible models that
 run on a laptop. Phases 0–5 ran on 2026-10-07, phase 6 on 2026-10-11, phase 7 on 2026-10-12/13, phases 8 and 9 on
-2026-10-13. Phase 10 is designed but not yet run. Other experiments (entity matching, classification, query plans) are
+2026-10-13, phase 10 from 2026-10-16 to 2026-10-20. Other experiments (entity matching, classification, query plans) are
 listed in [experiments/README.md](../README.md).
 
 Every phase wrote its question, metrics, thresholds and stopping rules into [protocol/](protocol/) before any data
@@ -40,8 +40,12 @@ was collected. Results added after seeing the data are marked as post hoc.
   opposite sentiment?" tokens and time drop to 26–33% and 2–11%, but F1 falls from 73.3% to 65.3%: moving the second
   record from the state into the question changes the answer, regardless of how many questions share a request. Verify
   per predicate before packing (phase 9).
-- **Fine-tuning Kev on public matching data** to reach Jev's zero-shot level on unseen matching data is designed
-  (leave-one-dataset-out) but not run (phase 10).
+- **Fine-tuning on public matching labels closes the gap on unseen product data, not on a new question.** Fine-tuned on
+  6,000 human-labelled pairs from three other datasets, Kev-4B matches Jev's zero-shot quality on two of four held-out
+  datasets (abt-buy, walmart-amazon) without forgetting; it stays behind on the hardest product set, and on dblp-acm,
+  asked a publication question no training record contains, it does not improve at all. Kev-0.8B matches on one of four
+  and forgets slightly on movie reviews. Trained with in-domain labels, Kev-4B's F1 is above Jev's on all four test sets.
+  Neither model meets the pre-registered verdict, which needs all four (phase 10).
 
 **Jev and LLMs (phases 0–5)**
 
@@ -754,15 +758,80 @@ pairwise form.
 Cost: Jev collection $1.004, the probe and two rehearsals $0.066, post-hoc questions $0.235; local models are free. The
 whole collection took 40 min, of which Kev-4B took 31 min.
 
-### Phase 10: fine-tuning Kev on public matching data (planned)
+### Phase 10: does fine-tuning on public matching data bring Kev to Jev's zero-shot level?
 
-The question: after Kev has seen record-matching labels from other sources, does it match Jev's zero-shot quality on a
-matching dataset it was never trained on? Four Magellan datasets, leave one out: train on three, test on the fourth,
-with a guard against forgetting on movie reviews, restaurant reviews and Kev's own development set. Labels are the
-benchmarks' human labels only; no output of Jev is used. The criteria ([protocol/p10.txt](protocol/p10.txt), not yet
-frozen) and the execution plan ([protocol/p10_plan.md](protocol/p10_plan.md)) are written, and the download, data and
-training scripts exist and were rehearsed on made-up rows. Estimated time on this machine: about 10.5 h for Kev-0.8B and
-28.5 h for Kev-4B, at no cost.
+Phases 6 and 7 found the largest gap between the open models and Jev on record matching, partly in the ranking, which
+calibration cannot change, and Kev's training data contain no record pairs. This phase asks: after Kev has seen
+human-labelled matching pairs from other sources, is it as good as Jev's zero-shot answers on a matching dataset it has
+never seen? Criteria: [protocol/p10.txt](protocol/p10.txt), frozen before any real pair was used, with the execution
+record at its end; runbook: [protocol/p10_plan.md](protocol/p10_plan.md).
+
+Four Magellan datasets, leave one out: abt-buy, amazon-google and walmart-amazon (products) and dblp-acm (publications).
+For each held-out dataset D, the model is fine-tuned on 2,000 human-labelled pairs from the training split of each of
+the other three (6,000 pairs, plus 2,000 replayed records of Kev's own training set against forgetting) and tested on
+D's full test split ("loo-D"); a fifth arm trains on all four datasets as an in-domain reference. Kev-4B and Kev-0.8B
+continue from their released v1.0 checkpoints with the settings of their own last fine-tuning stage (LoRA, learning rate
+2e-5, one epoch, one seed), on one Mac. Each checkpoint gets one temperature, fitted on 200 validation labels per training
+dataset and never on D. The line (T) is phase 6's rule against Jev's zero-shot answers on D: accuracy at most 2 points
+below, AUC at most 0.02 below, Brier at most 0.02 above. The guard (G): accuracy on movie reviews, restaurant aspects
+and Kev's own development set at most 2 points below the released checkpoint. A model passes only if all four held-out
+datasets meet T with G met. Only the benchmarks' human labels were used; no output of Jev was used for training,
+calibration or thresholds.
+
+**Result: neither model reaches Jev's zero-shot level on all four unseen datasets. Kev-4B does on two (abt-buy,
+walmart-amazon), Kev-0.8B on one (walmart-amazon).**
+
+Accuracy / AUC / Brier / F1 on the held-out dataset's full test split (released = the v1.0 checkpoint as shipped,
+fine-tuned = loo-D with its temperature; "n.s." = the interval of the difference contains the line):
+
+| Held out | Jev, zero-shot | Kev-4B released | Kev-4B fine-tuned | Kev-0.8B released | Kev-0.8B fine-tuned |
+| --- | --- | --- | --- | --- | --- |
+| abt-buy | 98.0% / 0.996 / 0.014 / 0.910 | 96.2% / 0.993 / 0.034 / 0.844 | **97.9% / 0.994 / 0.017 / 0.902: on par** | 70.3% / 0.974 / 0.202 / 0.418 | 94.4% / 0.984 / 0.045 / 0.665: below (accuracy, Brier) |
+| amazon-google | 92.1% / 0.961 / 0.057 / 0.695 | 85.2% / 0.937 / 0.117 / 0.557 | 89.9% / 0.951 / 0.085 / 0.644: below (accuracy −2.2, n.s.; Brier) | 66.9% / 0.923 / 0.216 / 0.373 | 91.6% / 0.940 / 0.065 / 0.635: below (AUC −0.021, n.s.) |
+| walmart-amazon | 97.9% / 0.987 / 0.019 / 0.884 | 93.9% / 0.981 / 0.054 / 0.733 | **97.9% / 0.987 / 0.017 / 0.882: on par** | 66.0% / 0.960 / 0.219 / 0.350 | **97.0% / 0.973 / 0.024 / 0.840: on par** |
+| dblp-acm | 99.0% / 0.999 / 0.009 / 0.973 | 92.0% / 0.985 / 0.045 / 0.742 | 92.2% / 0.990 / 0.060 / 0.742: below (accuracy, Brier) | 85.7% / 0.995 / 0.150 / 0.716 | 97.7% / 0.993 / 0.018 / 0.940: meets T, fails G |
+
+- **Fine-tuning helps on every product dataset, for both models.** F1 rises by 0.06–0.15 for Kev-4B and 0.25–0.49 for
+  Kev-0.8B, every interval above zero. Most of the gain is fewer false matches: Kev-4B on walmart-amazon goes from 104
+  to 16 (Jev 18).
+- **A new question does not transfer for Kev-4B.** dblp-acm is asked the publication question, which no training record
+  contains. Kev-4B's F1 there is unchanged (0.742 before and after; difference −0.001, −0.013 to +0.011), and it still
+  misses most of the matches it missed before (167, released 159, Jev 1). Kev-0.8B, starting much lower, rises from
+  0.716 to 0.940 and meets T, but fails the guard.
+- **Forgetting is absent for Kev-4B and slight for Kev-0.8B.** Kev-4B passes the guard on every checkpoint (largest drop
+  1.3 points, on Kev's own development set). Kev-0.8B loses 2.0–2.4 points on movie reviews in every fine-tuned
+  checkpoint (walmart-amazon passes at exactly −2.0, by one judgement of 1,001), while restaurant aspects gain 1.9–3.7
+  points and its own development set stays within 0.5.
+- **The temperature matters little.** The fitted temperatures are 1.3–1.8 (slightly softer), lowering Brier by at most
+  0.009 against the raw probabilities. A temperature fitted the same way on the released checkpoint stays far from the
+  fine-tuned Brier on the product datasets (Kev-4B walmart-amazon 0.045 against 0.017); on dblp-acm it is better than
+  Kev-4B's fine-tuned checkpoint (0.051 against 0.060).
+- **With in-domain labels, Kev-4B's F1 is above Jev's on all four test sets** (the all arm: abt-buy 0.926 vs 0.910,
+  amazon-google 0.749 vs 0.695, walmart-amazon 0.895 vs 0.884, dblp-acm 0.977 vs 0.973), and above Ditto's published F1
+  on abt-buy and walmart-amazon (0.893, 0.868). Kev-0.8B's all arm is level with Jev (0.712–0.982). Not like for like:
+  56–93% of these test pairs have both records in the training split, and Ditto trains one model per dataset on all its
+  training pairs.
+- **End to end on phase 8's raw tables** (pair form, 400 left records, sources the checkpoint never saw), Kev-4B's
+  fine-tuned checkpoints reach Jev's F1: abt-buy 91.7% vs 91.2% (difference −1.3 to +2.6), dblp-scholar 91.0% vs 90.4%
+  (−0.5 to +1.7), up from 85.6% and 88.5%. With "at most one match per left record" the released Kev-4B already reached
+  93.7%, and fine-tuning adds nothing (92.3%). Kev-0.8B's abt-buy checkpoint becomes too cautious (precision 100%, recall
+  50%).
+- **Candidate order**: training on yes/no pairs leaves the single-choice form's dependence on order as it was (Kev-4B
+  released 70–93% right across the three orders, fine-tuned 69–89%), as expected.
+- **Against the expectations written before the run**: Kev-4B met T on exactly the two datasets expected and missed the
+  two marked open; the expected improvement on all four folds held on the three product folds but not on dblp-acm.
+  Kev-0.8B improved strongly and met T on two, within the expected "at most two", but the expectation that the guard
+  holds everywhere was wrong for it.
+
+**What it means for `kevdb`.** Public labels are enough to make Kev-4B a substitute for Jev on product matching data it
+has not seen, as long as the question is one it was trained on, and without losing its other abilities. They are not
+enough for a matching task asked with a new question, nor for the hardest product set, where even Jev's F1 is 0.695.
+What the training fixes is the released model's main weakness, calling non-matching pairs a match. Kev-0.8B needs
+in-domain labels or calibration.
+
+Cost: none (local training and serving; Jev's column comes from the answers cached on 2026-10-05). Machine time,
+including the runs that were stopped and excluding the pause: Kev-0.8B about 12 h, Kev-4B about 30 h (five training runs
+of 5–6 h, evaluation 4–45 min per checkpoint), spread over five days in phases started by the owner.
 
 ## Limitations
 
@@ -799,6 +868,13 @@ training scripts exist and were rehearsed on made-up rows. Estimated time on thi
   so generative models were not tested with these forms. "Jev bills about 300 more tokens per request" subtracts the two
   backends' own counts, whose tokenizers may differ. The 50% cost bar was set before measuring; Kev-4B's Q missed it at
   53% and 59%. The "at most one" results are post hoc.
+- Phase 10: each arm was trained once with one seed and 2,000 pairs per dataset. Three of the four datasets are
+  products, so the reading on a new question rests on one fold (dblp-acm). The benchmarks have been public for years and
+  may be in the base models' training data, which affects released and fine-tuned checkpoints alike. Training ran in full
+  precision on Apple's GPU, not with the released recipe's bf16 on NVIDIA GPUs. The guard covers three sets only. The all
+  arm's test splits share most of their records with its training data. Kev-0.8B was trained without and Kev-4B with the
+  shape padding of the rule-8 fix below, so the two models also differ in their random dropout draws. The recorded
+  training time of Kev-4B's loo-abt-buy includes a 37.6-hour pause.
 - Phase 9: 128 reviews of one movie and one pair of opposite questions; the truth is the critics' overall verdict, not the
   text's sentiment, so no form reaches a high F1. Pairs are not independent, so intervals resample reviews. Kev-4B ran one
   question and one k. Times measured once. Packing with the second review kept in the state (phase 8's S) was not tested,
@@ -841,6 +917,16 @@ The primary analysis, success criteria and stopping rules of each phase were wri
   Jev's own repeat agreement on these two questions (98.1–98.8%), which only the post-hoc questions measured; this is
   recorded at the end of protocol/p9.txt, and the verdict rests on the quality bar. Added afterwards: the two extra sets
   of questions and the four analyses of `p9_posthoc.py`.
+- Phase 10: on Apple's GPU the trainer's memory grew with every new input length (Kev-0.8B's 8,000-record runs peaked
+  at 38.9–40.5 GiB; Kev-4B passed the run's 41 GiB guard after 2,160 records). Under rule 8 every later training run (all
+  of Kev-4B) went through [p10_kev_train.py](p10_kev_train.py), which applies Kev's own eval-mode padding to multiples of
+  64 tokens during training as well: memory then stayed at 28–32 GiB, and with dropout switched off the trained weights
+  change only at rounding level (2.2e-4 of the update); with dropout on, only the random dropout draw changes. The memory
+  probes behind this are [p10_memprobe.sh](p10_memprobe.sh). Interruptions, none of which changed a training record, a
+  request or an answer: the owner stopped phase 1 during Kev-0.8B's all arm, which was retrained from the start (rule 7);
+  the memory guard stopped Kev-4B's first loo-abt-buy run, retrained after the fix (rule 7); the owner paused Kev-4B's
+  loo-abt-buy for 37.6 hours by freezing its processes and resumed them, so the same computation continued. Every arm of
+  both models was collected with no unanswered request and no failed server. All of it is recorded in protocol/p10.txt.
 - The follow-up's size was set by the remaining balance. OpenRouter reserves credit per in-flight request based on its
   output limit and rejects concurrent requests when the balance is low, so collection took three runs (lower output
   limit, less concurrency, waiting after rejections); no answer was analysed between them.
@@ -901,10 +987,17 @@ P7_NO_REPORT=1 ./experiments/database/p7_run.sh --model kev-0.8b && P7_MODEL=kev
 ./experiments/database/p9_run.sh                           # Jev about 9 min and $1.00, then Kev-4B about 31 min; results in out/database/p9/report.txt
 .venv/bin/python experiments/database/p9_posthoc.py collect   # the two post-hoc sets of questions, about $0.23
 .venv/bin/python experiments/database/p9_posthoc.py report | tee out/database/p9/posthoc.txt
+
+# Phase 10: fine-tuning Kev on public matching data. Uses Kev-4B and Kev-0.8B from phases 6 and 7; no API key, free
+./experiments/database/p10_fetch.sh                               # the four training splits and Kev's replay data, about 28 MB
+./experiments/database/p10_run.sh --model kev-0.8b --rehearsal    # optional: the whole run on made-up rows, about 15 min
+./experiments/database/p10_run.sh --model kev-0.8b                # about 10 h on an M3 Max with 64 GB; out/database/p10/kev-0.8b/report.txt
+./experiments/database/p10_run.sh --model kev-4b                  # about 29 h; split into phases with --arms (protocol/p10_plan.md, section 6a)
+# since the rule-8 fix every training run is padded (p10_train.sh calls p10_kev_train.py); the recorded Kev-0.8B run was not
 ```
 
 The actual cost of running everything: Jev about $3.4 (plus $0.45 for phase 6, $0.03 for phase 7, $1.29 for phase 8,
-$1.31 for phase 9), OpenRouter $19.97 (the whole $20 top-up). Results go to `out/database/` (not committed), with a
+$1.31 for phase 9; phase 10 used no paid service), OpenRouter $19.97 (the whole $20 top-up). Results go to `out/database/` (not committed), with a
 `report.txt` or similarly named text file per phase.
 
 ## Report

@@ -15,7 +15,7 @@ stopping rules written before the run, followed by notes on deviations appended 
 | `p7_plan.md` | phase 7 execution plan. `p7.txt` prevails on criteria |
 | `p8.txt` | semantic joins: a left record's candidates pair by pair or in one request? (2026-10-13) |
 | `p9.txt` | does phase 8's packed form carry over to joins other than record matching? (2026-10-13) |
-| `p10.txt` | does fine-tuning Kev on public record-matching data reach Jev's zero-shot level on unseen matching data? (written 2026-10-13, not yet frozen, experiment not started) |
+| `p10.txt` | does fine-tuning Kev on public record-matching data reach Jev's zero-shot level on unseen matching data? (written 2026-10-13, frozen 2026-10-15, run 2026-10-16 to 2026-10-20; the execution record and every deviation are appended at its end) |
 | `p10_plan.md` | phase 10 execution plan. `p10.txt` prevails on criteria |
 
 ## Paths and checksums

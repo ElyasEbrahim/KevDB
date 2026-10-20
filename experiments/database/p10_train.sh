@@ -53,7 +53,9 @@ SANDBOX='(version 1)(allow default)(deny network-outbound)(allow network-outboun
 cd "$DIR/kev"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)  start $MODEL $ARM: $(wc -l < "$DATA" | tr -d ' ') training records, replaying $REPLAY" | tee "$LOG"
 # The longest state across the four training splits is 311 tokens, within the training script's default of 384; should it drop any record as too long, this run does not count (see below)
-sandbox-exec -p "$SANDBOX" .venv/bin/python -m kev.train \
+# Through p10_kev_train.py since 2026-10-17 (rule 8, see p10.txt): kev.train unchanged, with Kev's own MPS shape bucketing applied in training too,
+# which keeps the process's memory flat over a long run; without it Kev-4B passed 41 GB after 2,160 records
+sandbox-exec -p "$SANDBOX" .venv/bin/python "$ROOT/experiments/database/p10_kev_train.py" kev.train \
     --data "$DATA" --suite "$SUITE" --replay "$REPLAY" \
     --base "$BASE" --base_revision "$BASE_REVISION" --init_from "jaredpalmer/$MODEL@$WEIGHTS_TAG" \
     --epochs 1 --lr 2e-5 --batch "$BATCH" --accum "$ACCUM" --checkpointing "$CHECKPOINTING" --weights_dtype "$WEIGHTS_DTYPE" --p_none_pair 0.25 \
