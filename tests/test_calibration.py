@@ -66,7 +66,7 @@ def test_parameters_in_the_table_are_applied_in_sql(db):
     jev.reset()
     assert np.allclose(con.sql("SELECT jev_noul_cal(txt, 'Is it urgent?', 't') AS p FROM t ORDER BY id").fetchnumpy()["p"], np.clip(raw["p"], 1e-3, 1 - 1e-3), atol=1e-12)
     assert jev.meter.calls == 400 and jev.meter.fresh == 0
-    assert con.sql("SELECT jev_noul_cal(NULL, 'Is it urgent?', 't')").fetchone() == (None,)
+    assert con.execute("SELECT jev_noul_cal(NULL, 'Is it urgent?', 't')").fetchone() == (None,)
 
 
 def test_each_row_can_carry_its_own_predicate(db):
@@ -88,10 +88,10 @@ def test_each_row_can_carry_its_own_predicate(db):
         got = con.sql(f"SELECT id, question, {call} AS pc FROM asks ORDER BY id, question").fetchdf()
         assert np.allclose(got["pc"], raw["want"], atol=1e-12)
         # The same expression in WHERE, an aggregate FILTER, GROUP BY and a subquery must agree with the result above
-        assert con.sql(f"SELECT count(*) FROM asks WHERE {call} >= 0.5").fetchone()[0] == sum(kept.values())
-        assert con.sql(f"SELECT count(*) FILTER ({call} >= 0.5), avg({call}) FROM asks").fetchone() == pytest.approx((sum(kept.values()), raw["want"].mean()))
+        assert con.execute(f"SELECT count(*) FROM asks WHERE {call} >= 0.5").fetchone()[0] == sum(kept.values())
+        assert con.execute(f"SELECT count(*) FILTER ({call} >= 0.5), avg({call}) FROM asks").fetchone() == pytest.approx((sum(kept.values()), raw["want"].mean()))
         assert dict(con.sql(f"SELECT question, count(*) FROM asks WHERE {call} >= 0.5 GROUP BY 1").fetchall()) == {q: n for q, n in kept.items() if n}
-        assert con.sql(f"SELECT count(*) FROM (SELECT {call} AS pc FROM asks) WHERE pc >= 0.5").fetchone()[0] == sum(kept.values())
+        assert con.execute(f"SELECT count(*) FROM (SELECT {call} AS pc FROM asks) WHERE pc >= 0.5").fetchone()[0] == sum(kept.values())
     # Storing raw probabilities in a table first and calibrating them with calibrated gives the same result
     con.execute("CREATE TABLE judged AS SELECT id, question, scope, model, jev_noul(txt, question) AS p FROM asks")
     assert con.execute("SELECT count(*) FROM judged WHERE calibrated(p, ?, predicate_key(question, ''), scope) >= 0.5", [jev.model]).fetchone()[0] == sum(kept.values())

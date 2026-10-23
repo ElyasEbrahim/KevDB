@@ -34,6 +34,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   (it returns when that seed is retrained through the padding launcher), and the padding changes no result. Scripts
   `experiments/database/p14_*`, protocol and execution record in `experiments/database/protocol/p14.txt`.
 
+### Fixed
+
+- The offline tests no longer call `fetchone()` on a relation, which DuckDB 2.0 removed; they call it on the
+  executed query instead, which works with DuckDB 1.5 and 2.0. The package itself did not use it.
+
 ### Changed
 
 - `experiments/database/p10_train.sh` trains through `p10_kev_train.py`, which keeps a long training run's memory flat on

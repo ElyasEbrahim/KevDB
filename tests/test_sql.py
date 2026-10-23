@@ -22,20 +22,20 @@ def db(tmp_path):
 
 def test_functions_return_typed_answers_and_dedupe(db):
     con, jev, _ = db
-    p, label, level = con.sql("""
+    p, label, level = con.execute("""
         SELECT jev_noul(txt, 'Is it urgent?'), jev_choice(json_object('review', txt), 'Which?', '{"x": "X", "y": "Y"}'),
                jev_score(txt, 'How much?', '["none", "some", "lots"]') FROM t WHERE id = 3""").fetchone()
     assert 0 <= p <= 1 and label in ("x", "y") and 0 <= level <= 2
     jev.reset()
-    assert con.sql("SELECT count(*) FROM t WHERE jev_noul(txt, 'Is it urgent?') IS NOT NULL").fetchone() == (200,)
+    assert con.execute("SELECT count(*) FROM t WHERE jev_noul(txt, 'Is it urgent?') IS NOT NULL").fetchone() == (200,)
     assert jev.meter.calls == 30  # only 30 distinct texts among the 200 rows
-    assert con.sql("SELECT jev_noul(NULL, 'Is it urgent?')").fetchone() == (None,)
+    assert con.execute("SELECT jev_noul(NULL, 'Is it urgent?')").fetchone() == (None,)
 
     # Several questions packed together: one request per row, P(yes) for each question in order
     jev.reset()
     probs = con.sql("""SELECT jev_nouls(txt, '["Is it urgent?", "Is it long?", "Is it rude?"]') FROM t""").fetchall()
     assert jev.meter.calls == 30 and all(len(p) == 3 and all(0 <= x <= 1 for x in p) for (p,) in probs)
-    assert con.sql("SELECT jev_nouls(NULL, '[]')").fetchone() == (None,)
+    assert con.execute("SELECT jev_nouls(NULL, '[]')").fetchone() == (None,)
 
 
 def test_cheap_filter_runs_before_the_model(db):
