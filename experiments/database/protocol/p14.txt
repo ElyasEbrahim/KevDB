@@ -1,0 +1,119 @@
+2026-10-23T05:44:01Z  written before any phase 14 checkpoint existed. Status: the standard of phase 14, not yet frozen; a dated block with the scripts' checksums and the rehearsal's result is appended before the run, and from then on nothing above that block changes.
+
+Phase 14: is Kev-0.8B's drop on movie reviews in phase 10 a property of seed 1 or of training without padding?
+
+Why this phase. In phase 10 all five Kev-0.8B checkpoints (seed 1, trained before phase 10's rule-8 fix, so without the padding launcher)
+were 2.0 to 2.4 points below the released checkpoint on the movie-review guard g1; phase 10 read this as slight forgetting. In phase 13 the
+same arms trained with seeds 2 and 3, through the launcher, were 1.7 below to 0.3 above in all six checkpoints. Computed on phase 13's
+answers before this phase (a reading made after phase 13, not part of its standard): over phase 13's three arms and both seeds, g1 is
++1.3 points (95% interval +0.5 to +2.1, review texts resampled) above phase 10's seed 1. The two differ in two ways at once: the seed, and
+the launcher. Under one seed, the record order and which 2,000 decision-v7 records are replayed are fixed by Python's random module, so
+padding leaves them unchanged; what padding changes is the shapes the GPU computes, which phase 10's probe found to move the trained
+weights only at rounding level with dropout off, and to change the dropout draws with dropout on. Training seed 1 again through the
+launcher therefore keeps everything of phase 10's seed-1 runs except the padding and its dropout draws.
+Checked on the data alone before this phase (no model): the 2,000 replayed records of seeds 1, 2 and 3 contain 475, 513 and 465 records
+of the three sentiment sources (yelp, imdb, sst5) and 138, 148 and 170 of amazon; seed 3 replays fewer sentiment records than seed 1 and
+still passed, so the share of sentiment records alone does not explain the drop.
+
+Model and arms: Kev-0.8B only (code kev-1.0, weights jaredpalmer/kev-0.8b@v1.0, base Qwen/Qwen3.5-0.8B-Base@dc7cdfe2), phase 13's three
+arms: loo-amazon-google, loo-walmart-amazon, loo-dblp-acm. No Jev output is used for anything but the comparison column (its answers
+cached on 2026-10-05); every label is a human label of a public benchmark.
+
+Training (experiments/database/p14_train.sh): phase 13's p13_train.sh, which is phase 10's p10_train.sh with the launcher, with --seed 1:
+phase 10's data and settings unchanged (kev.train continued from the released checkpoint, learning rate 2e-5, one epoch, effective batch
+8, --p_none_pair 0.25, 2,000 replayed decision-v7 records, full-precision weights, gradient checkpointing, sandboxed). A run counts under
+phase 10's rules.
+
+Evaluation (experiments/database/p14_eval.py): as phase 13 (kev.serve, MLX, sandboxed, port 8015, concurrency 16; test.<held-out
+dataset>, the pools of the three training datasets, g1-g3). Phase 10's seed-1 answers and phase 13's seeds 2 and 3 are not asked again.
+
+The reading (experiments/database/p14_report.py), on g1 (1,000 review texts, scored per labelled review row as phase 6 scored them):
+- The mean over the three arms of (padded seed 1 minus phase 10's seed 1), with a 95% interval from 2,000 resamples of the review texts,
+  drawn once and applied to every arm.
+- B, "the drop came with phase 10's unpadded runs" (the padding or their dropout draws): the interval lies above zero.
+- A, "the drop belongs to seed 1" (its replay sample or record order): the interval contains zero.
+- Otherwise (the interval below zero) undetermined.
+- Readings without a line: per arm, the g1 difference with its own interval and whether padded seed 1 passes the g1 guard; line T and
+  guard G of every checkpoint judged as phase 10 judged them, and whether phase 10's verdict for the arm changes; the same mean for
+  seeds 2 and 3, as the reference.
+
+What I expect (written now, so that it can be wrong): A. The five phase 10 checkpoints were trained on different datasets, so their
+dropout draws differ from each other. Besides training without padding, which phase 10's probe found to matter only at rounding level,
+what they all share is seed 1's replay sample, which makes a seed-1 cause the more likely one.
+
+Rules of collection: phase 10's rules apply unchanged (p10_plan.md section 8). Until every run is settled only counts, timings, memory
+and the trainer's own loss line are looked at. No paid interface is called; training and serving run sandboxed without network access.
+
+Schedule: one command, ./experiments/database/p14_run.sh, the three runs in turn (about 1.7 h of training and 5 minutes of evaluation
+each), then the analysis; about 5.3 h, free.
+
+The owner's instructions (2026-10-23): "Write up Stage 13, then start the revised Stage 14!", after the revision was proposed: retrain
+Kev-0.8B with seed 1 through the launcher, to tell seed 1's replay sample from the launcher.
+
+2026-10-23T05:53:21Z  Before the run: a false start, the rehearsal with failure drills, and the checksums of every script and input. Written before any real phase 14 checkpoint existed. With this block the standard is frozen: nothing above it changes.
+
+A false start (2026-10-23 05:44:33-05:45:18 UTC). p14_train.sh was made from p13_train.sh and still tested phase 13's rehearsal variable,
+so the first rehearsal's first training run (loo-amazon-google.seed1) read phase 10's real training file and wrote into open_models/p14.
+It was stopped 35 s after its start, while the model was still loading: no training step, no checkpoint, no request, no answer. Its
+folder (only training_config.json) and log were deleted; the rehearsal's logs are kept as out/database/p14/*.false-start.*. The script now
+tests P14_REHEARSAL, and a test checks that every phase's training script tests its own rehearsal variable.
+
+Rehearsal (P14_REHEARSAL=1 ./experiments/database/p14_run.sh --rehearsal, 2026-10-23 05:46-05:53 UTC, from empty folders): phase 10's
+made-up rows (the questions are the real ones), 16 replayed records, the Jev column made up from the labels, phase 10's and phase 13's
+seeds read from their rehearsal results.
+- Pre-flight checks passed; offline tests 136 passed, 2 skipped; verify passed (9 of 9).
+- Drill A (rule 2): the training process of loo-walmart-amazon.seed1 was killed (SIGKILL) 30 s after its start; set aside, trained once
+  more from the beginning and completed; training.tsv and deviations.txt record both attempts.
+- Drill B (rule 4): the server of loo-dblp-acm.seed1 was killed after its first set was written; the step was done once more with a new
+  server, the finished set not asked again.
+- All 3 runs complete (83-89 s of training, peak footprint 7.0-7.1 GiB); inventory and analysis written, the reading included. The
+  rehearsal's numbers mean nothing.
+
+Scripts and inputs (sha256), frozen with this block
+b8096d5b4f8c850aeb295714c0fb9838a53103e8a46e550eaa32585cfa977dd8  experiments/database/p14_train.sh
+5e4d555739df2cd26a840b1ea18cce2371f49cf4a39bfff1ad9eeb633fb27ef6  experiments/database/p14_eval.py
+626eb83389ca5f333225eadcaa3c2a19414fe2a17763df861e7e47c561b3ae78  experiments/database/p14_report.py
+6df1f311436b1b4a9c0e740bcdb07bf05996e9a2cb8a82d369b44d9316b6c1e4  experiments/database/p14_run.sh
+90cc365c4c66493d2bdb2918241464337875316d33e5cd72012c0b5ac21ed750  tests/test_p14.py
+Reused from phases 10-13 and earlier, unchanged since phase 13's freeze block:
+6af7ba0abcdad55efc7fd6dd6577aa5d055378592fe11f966e514c3ee9a74898  experiments/database/p10_train.sh
+16b143a43494936ef404ae6382729608a70d1808ba0151154b50e6a744fa09f1  experiments/database/p10_eval.py
+22bac7b35f2b85051ffee77126b7376a5adcf435e90d4d0687f0099b063cd83e  experiments/database/p10_report.py
+b2d01559448a3d0e18e7b77ffc180f373733513418223a08cdb030c44a3ef5fa  experiments/database/p10_data.py
+2fce1473d5e94e9ef59658450e9526d0940aa5450dd400ea8661739a4ef17650  experiments/database/p10_kev_train.py
+9a8dd356bc36bf01ba7652879a32ceb209a63b4b21d0cdbe6e2b0289fef3ba56  experiments/database/p10_fetch.sh
+b026b37f1eff9c5ed42457c7d332a468969cb8c05d762628ae838f1874ee59b9  experiments/database/paths.py
+069f074a13f9893ff00358168ac9a911ae9d0860339ff215466d95f403ff1604  experiments/entity_match/run.py
+8afbbeb0899ac35867e6ac28dd6740064d4514eac83b2183b364669cc4912023  experiments/database/p6_collect.py
+3d237865b0dc34f3d45613847a0cf765d2bbf0a49d796cadbf25a68f740a4f07  experiments/database/p4_collect.py
+329053189bd9e60f5e6731d5042da88276407f870e5ee65eecf92b5c42b1f54b  experiments/database/p2_collect.py
+cad71aedc289d72e0bd6b9dcede9113ebde4891b44e3fc8e0e3c0f058df1b2bb  experiments/database/p3_aggregates.py
+1030f5c544d79c74b26e9d3bf6c71157e52eed915f5db613bcbe267e3a4e48ac  src/kevdb/engine.py
+bac5a3c890c0c72b5e061e2e4f12293bb0c1bbbd6e96f97c9d523ce87319c0de  src/kevdb/open_models.py
+9cac22b9b074862caa3ae34b8ec44ab4e3fb71f67f21f0b0902e4a33ba300482  src/kevdb/client.py
+c2ea4fef1ef1f9f59422606e1af2fe5cd26608cf032d87ab777afe4d6d36c77c  src/kevdb/cache.py
+bbef7e3049c9868725ea049231a0469ed0d39d2f0bb81d6c6d67e3cf3eb4823a  src/kevdb/__init__.py
+Inputs: phase 10's inputs and its training files of the three arms (out/database/p10/train/loo-amazon-google.jsonl, loo-walmart-
+amazon.jsonl and loo-dblp-acm.jsonl), checked against phase 10's frozen checksums by p14_eval.py verify before every run; the compared
+answers of phase 10 (out/database/p10/kev-0.8b/<arm>/) and phase 13 (out/database/p13/kev-0.8b/<arm>.seed2, .seed3).
+
+Start: right after this block, ./experiments/database/p14_run.sh, detached from any session.
+
+2026-10-23T11:16:25Z  Execution record, appended after the run. Nothing above this block was changed.
+
+Run: ./experiments/database/p14_run.sh, started detached on 2026-10-23T05:53:28Z, finished 2026-10-23T11:04:19Z (5 h 11 min) in one
+invocation. Pre-flight checks, tests and verify (9 of 9) passed. No deviation: no interruption, no retraining, no failed server, no
+unanswered request; no deviations.txt was written.
+- Training (one attempt each): 5,756-6,136 s, peak footprint 10.8 GiB (the run's log says MB for MiB). Evaluation 4-5 minutes per run.
+- No answer was looked at before every run was settled; the analysis ran at the end of the invocation.
+
+The reading: g1, padded seed 1 minus phase 10's seed 1, mean over the three arms: -0.0 points (95% interval -0.1 to +0.1). The
+interval contains zero: A, the drop belongs to seed 1 (its replay sample or record order). As expected before the run.
+- Per arm (g1 against the released checkpoint, phase 10's seed 1 -> padded seed 1): loo-amazon-google -2.4 -> -2.4 (difference 0.0,
+  0.0 to 0.0), loo-walmart-amazon -2.0 -> -2.1 (-0.1, -0.3 to 0.0), loo-dblp-acm -2.3 -> -2.2 (+0.1, -0.2 to +0.4). Padded seed 1
+  fails the g1 guard on all three arms.
+- Reference: seeds 2 and 3 minus phase 10's seed 1, +1.3 points (+0.4 to +2.1).
+- Every other quantity of padded seed 1 against phase 10's seed 1: the same fitted temperatures (1.447, 1.701, 1.823), accuracy within
+  0.25 points, AUC within 0.0015, Brier within 0.002, F1 within 0.009, g2 within 0.3 points, g3 within 0.1.
+- Verdicts as phase 10 judged them: loo-amazon-google below (AUC, guard g1) and loo-dblp-acm below (guard g1), unchanged;
+  loo-walmart-amazon changes from on par (g1 exactly -2.0) to below (g1 -2.1).
