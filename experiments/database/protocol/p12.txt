@@ -1,0 +1,188 @@
+2026-10-20T12:51:15Z  written before any model saw a phase 12 training record and before any phase 12 checkpoint existed. Status: the standard of phase 12, not yet frozen; a dated block with the scripts' checksums and a rehearsal's result is appended before the run, and from then on nothing above that block changes.
+
+Phase 12: with how many of their own labels does Kev-4B reach Jev's zero-shot level on a matching dataset it has not seen?
+
+Why this phase. Phase 10 (protocol/p10.txt) showed two things for a user who wants Kev instead of Jev on their own matching data. Public
+labels from other datasets bring Kev-4B to Jev's level on some unseen datasets (abt-buy, walmart-amazon) and not on others (amazon-google,
+dblp-acm). And with 2,000 labels of the dataset itself (the all arm) Kev-4B's F1 was above Jev's on all four, but that reading is inflated:
+in those splits most test pairs have a record that also occurs in a training pair. The practical question is how many labels of their own
+data a user needs, measured on records the labels never contained, with the recipe Kev's author documents for fine-tuning on one's own data.
+
+Model: Kev-4B only (code kev-1.0, weights jaredpalmer/kev-4b@v1.0, base Qwen/Qwen3.5-4B-Base@1001bb4d). Jev (jev-1.13.0) appears only as
+the comparison column, from the answers cached on 2026-10-05. No Jev output is used to train, fine-tune, calibrate or pick a threshold for
+any model; every label is a human label of a public benchmark.
+
+Data (experiments/database/p12_data.py; the four Magellan datasets of phase 10, files as frozen there)
+- Every record of a dataset, as written in the file, is put on the test side or the label side by the parity of sha256("p12|<dataset>|<record>").
+- Test pairs: the pairs of the test split, and of the 600 validation pairs Jev was asked (experiments/entity_match/run.py --sample 600,
+  random.Random(0); Jev has no answer to the other validation pairs, and no paid interface is called), whose two records are both on the
+  test side: abt-buy 632 pairs (59 matches), amazon-google 664 (66), walmart-amazon 669 (61), dblp-acm 766 (152).
+- Label pool: the pairs of the training split whose two records are both on the label side (1,368 / 1,894 / 1,503 / 1,896 pairs, 146 / 183
+  / 165 / 321 matches), in the order of sha256("p12|<dataset>|<pair id>"). No record of a test pair occurs in any label (p12_data.py check).
+- Budgets n = 100, 300 and 1,000 labels: the first n pairs of the pool, so the budgets are nested. Following the author's recipe ("keep
+  10-20% of the file aside"), the last 20% of each budget are held out to fit the temperature and the first 80% are trained on. The
+  held-out labels are few: 20 at n = 100 (1-5 matches), 60 at n = 300 (4-10), 200 at n = 1,000 (15-30).
+
+Starting points and training (experiments/database/p12_train.sh; one run per dataset, budget and starting point; no search)
+- main: phase 10's loo-<dataset> checkpoint, which has never seen the dataset (public labels of the other three, then the user's own), at
+  n = 100, 300 and 1,000. It must hold exactly the weights phase 10 evaluated (p12_eval.py verify, digests from phase 10's cache names).
+- reference: the released checkpoint, at n = 300 and 1,000: the author's recipe as documented, without phase 10's public stage.
+- The recipe (open_models/kev/README.md, "Fine-Tune on Your Own Data", By Hand): kev.train --data <file> --init_from <start>, 2 epochs,
+  learning rate 2e-5, --batch 1 --accum 8, gradient checkpointing, nothing replayed, seed 1. On this Mac as in phases 10 and 11:
+  full-precision weights on Apple's GPU, sandboxed without network, through p10_kev_train.py (phase 10's rule-8 padding). The recipe's
+  --dtype bf16 is CUDA only, and --p_none_pair applies to choice questions only, so neither is passed. Every record fits kev.train's
+  limits (checked with its own loader: 0 of 4,000 would be dropped); a run that drops one, or does not train on every record in both
+  epochs, does not count.
+- Temperature: one per run, fitted as in phase 10 (Kev's own grid, 0.25-4) on the 20% held out of the same budget only. At n = 0: loo-<dataset>
+  with the temperature phase 10 fitted for it (on the pool labels of the other three datasets); the released checkpoint as it ships.
+
+Evaluation (experiments/database/p12_eval.py): each checkpoint served as in phases 6-11 (kev.serve, MLX, sandboxed, port 8015, concurrency
+16) and asked its dataset's test pairs with phase 10's unchanged first-draft question, its held-out 20%, and the guard sets g1-g3 of phase 10.
+n = 0 is the starting checkpoint itself: loo-<dataset> and the released checkpoint are asked the test pairs only (most answers come from
+phase 10's cache of the same weights: 2,413 of 2,731 for the released checkpoint, 2,187 of 2,731 for the four loo checkpoints); their guard
+answers are phase 10's. A decision is p >= 0.5.
+
+Lines (per dataset, main starting point)
+- n*: the smallest of n = 0, 100, 300, 1,000 at which the checkpoint is on par with Jev on the test pairs by phase 6's rule (accuracy not
+  more than 2.0 points below, AUC not more than 0.02 below, Brier not more than 0.02 above; point estimates decide, more than 5% unanswered
+  counts as below) and passes the guard (no guard set more than 2.0 points below the released checkpoint). Otherwise "more than 1,000".
+  Undetermined if a run below the first budget that meets it is missing.
+- Readings without a line: accuracy, AUC, Brier and F1 against n with 95% intervals (2,000 bootstrap resamples of test pairs), false and
+  missed matches; whether every budget above n* meets it too; the main minus the reference starting point at n = 0, 300 and 1,000 (paired
+  bootstrap of the F1 and Brier differences: does phase 10's public stage save a user labels?); each run scored with its starting point's
+  temperature instead of its own (how much the small held-out slice matters); the guard per run.
+- The test sets are small (59-152 matches): the intervals are reported with every number, and a reading near a line is called not
+  separable from it.
+
+What I expect (written now, so that it can be wrong)
+- abt-buy and walmart-amazon: n* = 0 (on par before any own label, as in phase 10).
+- amazon-google: n* = 1,000 or more than 1,000.
+- dblp-acm: n* = 100 or 300 (the publication question is learned quickly once it is in training).
+- The main starting point is ahead of the reference at n = 300 (F1 interval above zero) and the gap narrows at n = 1,000.
+- The guard holds without replay at these sizes.
+
+Rules of collection: phase 10's rules apply unchanged (p10_plan.md section 8: pre-flight checks, one retrain after a crash or the memory
+watchdog, the run missing after a second failure, one redo of an evaluation step whose server fails, up to 4 re-ask passes, more than 5%
+unanswered counts as below, a finished step is never repeated, interruptions resume with the same command). Until every run is settled
+only counts, timings, memory and the trainer's own loss line are looked at. No paid interface is called; training and serving run
+sandboxed without network access.
+
+Schedule: after phase 11 (one job on the GPU at a time), a rehearsal on made-up rows (budgets 10, 20, 40, the real starting checkpoints,
+a training run and a server killed on purpose), then one command, ./experiments/database/p12_run.sh: the released checkpoint, then per
+dataset n = 0 and the five trained runs, then the analysis (experiments/database/p12_report.py). Estimated from phase 10 (Kev-4B, padded,
+about 2.2 s per record and epoch, about 2 minutes to load): training 8, 20 and 61 minutes per run at n = 100, 300 and 1,000, about 11 h in
+all; evaluation about 14 minutes per trained run, about 5 h; about 16-17 h in all, free.
+
+The owner's instructions (2026-10-20): "Just go ahead and start in the order you recommended!" (phase 11, then phase 12).
+
+2026-10-21T12:12:13Z  Before the run: the rehearsal with failure drills, and the checksums of every script and input. Written before any real phase 12 training record was given to a model and before any phase 12 checkpoint existed. With this block the standard is frozen: nothing above it changes.
+
+The owner's instructions (2026-10-21): "start Stage 12", given while phase 11 was still running. A detached script was set to wait for
+phase 11 and then rehearse; at 03:18 UTC the owner said "you don't need to automatically start the next phase", and it was stopped
+before it had started anything. After phase 11 had finished: "Let's proceed to the next step based on your suggestion!", that is, the
+rehearsal, then this block, then the run.
+
+Rehearsal (P12_REHEARSAL=1 ./experiments/database/p12_run.sh --rehearsal, Kev-4B, 2026-10-21 11:16-12:11 UTC): every row made up (the
+question is the real one), budgets 10, 20 and 40, the real starting checkpoints, the Jev column made up from the labels, checkpoints in
+open_models/p12_rehearsal, results in out/database/p12_rehearsal.
+- Pre-flight checks passed; offline tests 122 passed, 2 skipped; the data steps and verify passed (53 of 53).
+- Drill A (rule 2): the training process of abt-buy.loo.20 was killed (SIGKILL) 45 s after its start. The run was set aside under
+  failed/, trained once more from the beginning and completed; training.tsv and deviations.txt record both attempts.
+- Drill B (rule 4): the server of amazon-google.loo.10 was killed after its first set was written. The step was done once more with a
+  new server; the finished set was not asked again.
+- All 25 runs complete (21 training runs of 42-161 s, peak footprint 18.0-18.2 GiB); inventory and analysis (report.txt, results.json)
+  written. The released checkpoint's answers found in earlier caches were reused (61 of 165). The n = 0 runs found none: phase 10's
+  rehearsal checkpoints are deleted, so its rehearsal cache holds other weights' answers; for the real run the reuse was counted on the
+  real rows beforehand (2,187 of 2,731 for the four loo checkpoints, 2,413 of 2,731 for the released one). The rehearsal's numbers mean
+  nothing: its made-up rows are so easy that every model is right on all of them.
+
+Scripts and inputs (sha256), frozen with this block
+7e89e11daf1ddd721b2a12ee4f4d1fc733afb0af98e06179dee5ad92e3ce5e29  experiments/database/p12_data.py
+77b4e65fcb5c045347508fc4fae57c775d28ba9e5ee27dc4c5dde9c1c35f7322  experiments/database/p12_train.sh
+d3c837f836c286a178981460152b4293cf0151fa3b67458b7d386bc66f7aa1c7  experiments/database/p12_eval.py
+06a13297f7562d27473c513ccd48a287b531e5132dfa65042f670305ebd1e5b8  experiments/database/p12_report.py
+58d387c4163597719ef4280d02fde8e42225034c66632d71751abe5e6d58f5e0  experiments/database/p12_run.sh
+e09f05826d40c1d919d4995116ba59e300f2e16e6b1032f9fe779c60ac2a4036  tests/test_p12.py
+Reused from phases 10 and 11 and earlier, unchanged since phase 11's freeze block (2026-10-20T12:31:57Z):
+16b143a43494936ef404ae6382729608a70d1808ba0151154b50e6a744fa09f1  experiments/database/p10_eval.py
+22bac7b35f2b85051ffee77126b7376a5adcf435e90d4d0687f0099b063cd83e  experiments/database/p10_report.py
+b2d01559448a3d0e18e7b77ffc180f373733513418223a08cdb030c44a3ef5fa  experiments/database/p10_data.py
+2fce1473d5e94e9ef59658450e9526d0940aa5450dd400ea8661739a4ef17650  experiments/database/p10_kev_train.py
+9a8dd356bc36bf01ba7652879a32ceb209a63b4b21d0cdbe6e2b0289fef3ba56  experiments/database/p10_fetch.sh
+b026b37f1eff9c5ed42457c7d332a468969cb8c05d762628ae838f1874ee59b9  experiments/database/paths.py
+069f074a13f9893ff00358168ac9a911ae9d0860339ff215466d95f403ff1604  experiments/entity_match/run.py
+8afbbeb0899ac35867e6ac28dd6740064d4514eac83b2183b364669cc4912023  experiments/database/p6_collect.py
+3d237865b0dc34f3d45613847a0cf765d2bbf0a49d796cadbf25a68f740a4f07  experiments/database/p4_collect.py
+329053189bd9e60f5e6731d5042da88276407f870e5ee65eecf92b5c42b1f54b  experiments/database/p2_collect.py
+cad71aedc289d72e0bd6b9dcede9113ebde4891b44e3fc8e0e3c0f058df1b2bb  experiments/database/p3_aggregates.py
+1030f5c544d79c74b26e9d3bf6c71157e52eed915f5db613bcbe267e3a4e48ac  src/kevdb/engine.py
+bac5a3c890c0c72b5e061e2e4f12293bb0c1bbbd6e96f97c9d523ce87319c0de  src/kevdb/open_models.py
+9cac22b9b074862caa3ae34b8ec44ab4e3fb71f67f21f0b0902e4a33ba300482  src/kevdb/client.py
+c2ea4fef1ef1f9f59422606e1af2fe5cd26608cf032d87ab777afe4d6d36c77c  src/kevdb/cache.py
+bbef7e3049c9868725ea049231a0469ed0d39d2f0bb81d6c6d67e3cf3eb4823a  src/kevdb/__init__.py
+Inputs: the 20 files in p12_eval.py INPUTS (the train, valid and test splits of the four datasets; Jev's cached test and validation
+answers) and decision-v7's development split, and the weights of phase 10's four loo-<dataset> checkpoints (digests in p12_eval.py
+P10_DIGESTS, the ones phase 10 evaluated), all checked by p12_eval.py verify before every run.
+Built from them (p12_data.py build; sha256, records; also frozen in p12_eval.py BUILT and checked before every run):
+e8f77cd2034989e6036eaf96c5609f34dfe8a91ab1ed625a84037fcf499ddfdc  out/database/p12/side/abt-buy.jsonl  632 records
+59900ac499cb4e5522b9eba96ba87bd95f7109e79d81b219b8e5af65416bab42  out/database/p12/side/amazon-google.jsonl  664 records
+4577a56dc25103b17665ed408fd6ff652851964597eb23d64a6be03d4a30a47c  out/database/p12/side/dblp-acm.jsonl  766 records
+76887e3107e90043a0bb14726a9fd44fe7699b87cf38d679b345b7fe9727abda  out/database/p12/side/walmart-amazon.jsonl  669 records
+ff4723f71a3245cdefa41a96c20122315d5505cc62f61a2316cdc56bd53ba410  out/database/p12/train/abt-buy.100.jsonl  80 records
+3b927c8c7d1de151e219fa8396264d922c3d3858bf82a8f5bef8acc1649a38fe  out/database/p12/train/abt-buy.1000.jsonl  800 records
+04df99a79e0fa244d23269c9fd1cd362fc48030e335a6b3647650d5a3dc3593c  out/database/p12/train/abt-buy.300.jsonl  240 records
+4a5c96d076c92e82c737608dc054bc166be69762ed49a134be51e1924ceed909  out/database/p12/train/amazon-google.100.jsonl  80 records
+f361c730e08485bcc4fb02b19fa41eb3fec417b05f1bc762c582bd624691b3ee  out/database/p12/train/amazon-google.1000.jsonl  800 records
+e6bb5b2ca76fe9d4219e3455c620025ef3c178d8cc97307ae9697032405af723  out/database/p12/train/amazon-google.300.jsonl  240 records
+44f4999677fd03b34fe69566d88c546c0330d0fc54f230da4393f81c4398cc6c  out/database/p12/train/dblp-acm.100.jsonl  80 records
+c2d956f870493be79e0c84f8905cb0953f7963863bff67524eacff579633f85d  out/database/p12/train/dblp-acm.1000.jsonl  800 records
+02be67b42d651e82a27227d2a22590e7e0395693e2254ae48665f88e2e6615ae  out/database/p12/train/dblp-acm.300.jsonl  240 records
+c1d771b8c97fd3e8f69f52666045c20e63b85d040e1a4aee5d8fb45f9ebaad91  out/database/p12/train/walmart-amazon.100.jsonl  80 records
+00bbae80a679ab430ab85db10b17260803baf8111035ffbd9e15dede45e33f21  out/database/p12/train/walmart-amazon.1000.jsonl  800 records
+856aa09f97f29c310903d174ae5e95927cd6ffcee769f4950f5bfd9eb9c50b56  out/database/p12/train/walmart-amazon.300.jsonl  240 records
+2bd5cebf65090f6f5155632bedc643f594070eb53742d77dd5a614eaf133993b  out/database/p12/slice/abt-buy.100.jsonl  20 records
+075908b970a7288916b7fbbbb6e098fdf4a264c65b662c69362835668fc69ae8  out/database/p12/slice/abt-buy.1000.jsonl  200 records
+f33bec41138015e7adae62feeda857e1a92ac1fe8790a7967c24d0b28669d3fa  out/database/p12/slice/abt-buy.300.jsonl  60 records
+74d4b8261e8960b24e74bdb4219d7001b74ef168931e3975653f92c6eed83763  out/database/p12/slice/amazon-google.100.jsonl  20 records
+534c0118232b1ee525efbbf34c3b2828559e934813f565d2c62f866840f343b8  out/database/p12/slice/amazon-google.1000.jsonl  200 records
+126212e79975aa73c39be0bc995ba5c7fbdc4ed1875e2422262642272a29f52a  out/database/p12/slice/amazon-google.300.jsonl  60 records
+f03100483dcaa66017ca6328345f651ba7b1cecc4dd3bc399dc62630fb78a9f2  out/database/p12/slice/dblp-acm.100.jsonl  20 records
+31763451fc92b8b0702a8715ac40add76594754674f5c0ea04a32d391086a42d  out/database/p12/slice/dblp-acm.1000.jsonl  200 records
+4dc58dd640a9b8360291495656422a1d56ab2102afade76169ca465cc3e196a8  out/database/p12/slice/dblp-acm.300.jsonl  60 records
+daf12d1477e7923782dbd9339c24d94c35918fd85fea0c4156c7971f2ebd6c3c  out/database/p12/slice/walmart-amazon.100.jsonl  20 records
+62d21da5b4b99b060a15e74e998bb47b5cfceff0509d0faf585264a104d4c919  out/database/p12/slice/walmart-amazon.1000.jsonl  200 records
+2b64a18da6fe41b9e79bc1005d85138e646702b0a452a033d08b26ef45f66a8a  out/database/p12/slice/walmart-amazon.300.jsonl  60 records
+
+Start: right after this block, ./experiments/database/p12_run.sh, detached from any session.
+
+2026-10-22T03:41:26Z  Execution record, appended after the run. Nothing above this block was changed.
+
+Run: ./experiments/database/p12_run.sh, started detached on 2026-10-21T12:12:26Z, finished 2026-10-22T02:16:34Z (14 h 4 min) in one
+invocation. Pre-flight checks, tests and verify (53 of 53) passed. No deviation: no interruption, no retraining, no failed server, no
+unanswered request; deviations.txt was never written.
+- Training (one attempt each, every record trained on in both epochs): 296-414 s at n = 100, 856-1,201 s at 300, 2,818-3,978 s at
+  1,000; peak footprint 18.1-21.0 GiB (the run's log says MB for MiB).
+- Evaluation: one server start per run, about 12 minutes per trained run. Answers already in phase 10's caches of the same weights were
+  reused as counted beforehand (the released checkpoint: 549 of 632 requests on abt-buy).
+- No answer was looked at before every run was settled; the analysis ran at the end of the invocation.
+
+Line n* (main starting point): abt-buy 0, walmart-amazon 0, dblp-acm 100, amazon-google 300; at every budget above n* the line holds
+too. Every one of the 20 trained runs passes the guard (largest drop 1.5 points, abt-buy.loo.1000 on g3).
+- abt-buy (632 pairs, 59 matches; Jev F1 0.959): main F1 0.950 / 0.868 / 0.943 / 0.967 at n = 0 / 100 / 300 / 1,000, on par at
+  every n; released 0.861 below (accuracy, Brier), +300 0.934 on par, +1,000 0.950 on par.
+- walmart-amazon (669, 61; Jev 0.882): main 0.889 / 0.908 / 0.868 / 0.913, on par at every n; released 0.709 below, +300 0.842 and
+  +1,000 0.900 on par.
+- dblp-acm (766, 152; Jev 0.974): main 0.751 below (accuracy, Brier) / 0.956 / 0.984 / 0.993 on par; released 0.764 below, +300 0.974
+  and +1,000 0.990 on par.
+- amazon-google (664, 66; Jev 0.744): main 0.663 below (accuracy, Brier) / 0.348 below (accuracy) / 0.646 / 0.701 on par; released
+  0.603 below, +300 0.576 and +1,000 0.667 on par. On par by accuracy, AUC and Brier; its F1 stays below Jev's at every budget.
+- Main minus reference, F1: n = 0 abt-buy +0.089 (+0.031 to +0.150), amazon-google +0.060 (+0.019 to +0.101), walmart-amazon +0.180
+  (+0.113 to +0.255), dblp-acm -0.013 (-0.036 to +0.005); n = 300 and 1,000: every interval contains zero or touches it (largest
+  +0.069, -0.000 to +0.138, amazon-google at 300; dblp-acm +0.010, 0.000 to +0.022 at 300).
+- With the starting point's temperature instead of the run's own, no verdict changes. At n = 100 the fitted temperature is at the
+  grid's lower bound (0.25) on abt-buy and walmart-amazon.
+
+Against the expectations written before the run: n* = 0 on abt-buy and walmart-amazon, and n* = 100 on dblp-acm, as expected; the
+guard held everywhere, as expected; amazon-google was expected to need 1,000 or more and needed 300; the main starting point was
+expected to be ahead of the reference at n = 300 with an interval above zero, and is not on any dataset (dblp-acm's interval starts
+at zero); the gap narrows towards n = 1,000 as expected.
