@@ -66,7 +66,7 @@ def test_parameters_in_the_table_are_applied_in_sql(db):
     jev.reset()
     assert np.allclose(con.sql("SELECT jev_noul_cal(txt, 'Is it urgent?', 't') AS p FROM t ORDER BY id").fetchnumpy()["p"], np.clip(raw["p"], 1e-3, 1 - 1e-3), atol=1e-12)
     assert jev.meter.calls == 400 and jev.meter.fresh == 0
-    assert con.execute("SELECT jev_noul_cal(NULL, 'Is it urgent?', 't')").fetchone() == (None,)
+    assert con.execute("SELECT jev_noul_cal(NULL, 'Is it urgent?', 't')").fetchall()[0] == (None,)
 
 
 def test_each_row_can_carry_its_own_predicate(db):
@@ -88,13 +88,13 @@ def test_each_row_can_carry_its_own_predicate(db):
         got = con.sql(f"SELECT id, question, {call} AS pc FROM asks ORDER BY id, question").fetchdf()
         assert np.allclose(got["pc"], raw["want"], atol=1e-12)
         # The same expression in WHERE, an aggregate FILTER, GROUP BY and a subquery must agree with the result above
-        assert con.execute(f"SELECT count(*) FROM asks WHERE {call} >= 0.5").fetchone()[0] == sum(kept.values())
-        assert con.execute(f"SELECT count(*) FILTER ({call} >= 0.5), avg({call}) FROM asks").fetchone() == pytest.approx((sum(kept.values()), raw["want"].mean()))
+        assert con.execute(f"SELECT count(*) FROM asks WHERE {call} >= 0.5").fetchall()[0][0] == sum(kept.values())
+        assert con.execute(f"SELECT count(*) FILTER ({call} >= 0.5), avg({call}) FROM asks").fetchall()[0] == pytest.approx((sum(kept.values()), raw["want"].mean()))
         assert dict(con.sql(f"SELECT question, count(*) FROM asks WHERE {call} >= 0.5 GROUP BY 1").fetchall()) == {q: n for q, n in kept.items() if n}
-        assert con.execute(f"SELECT count(*) FROM (SELECT {call} AS pc FROM asks) WHERE pc >= 0.5").fetchone()[0] == sum(kept.values())
+        assert con.execute(f"SELECT count(*) FROM (SELECT {call} AS pc FROM asks) WHERE pc >= 0.5").fetchall()[0][0] == sum(kept.values())
     # Storing raw probabilities in a table first and calibrating them with calibrated gives the same result
     con.execute("CREATE TABLE judged AS SELECT id, question, scope, model, jev_noul(txt, question) AS p FROM asks")
-    assert con.execute("SELECT count(*) FROM judged WHERE calibrated(p, ?, predicate_key(question, ''), scope) >= 0.5", [jev.model]).fetchone()[0] == sum(kept.values())
+    assert con.execute("SELECT count(*) FROM judged WHERE calibrated(p, ?, predicate_key(question, ''), scope) >= 0.5", [jev.model]).fetchall()[0][0] == sum(kept.values())
 
 
 def test_noul_with_criteria_sends_them_and_keys_its_own_parameters(tmp_path):
@@ -109,11 +109,11 @@ def test_noul_with_criteria_sends_them_and_keys_its_own_parameters(tmp_path):
     b = Backend("jev", lambda: JevClient("k", provider="typesafe", transport=httpx.MockTransport(handler)), cache_path=tmp_path / "c.sqlite")
     register(con, "jev", b)
     calibration.install(con, "jev", b.model)
-    assert con.execute("SELECT jev_noulc(json_object('a', 1), ?, ?)", [QUESTION, CRITERIA]).fetchone() == (0.25,)
+    assert con.execute("SELECT jev_noulc(json_object('a', 1), ?, ?)", [QUESTION, CRITERIA]).fetchall()[0] == (0.25,)
     assert seen == [{"state": {"a": 1}, "model": b.client.model, "questions": {"q": {"type": "noul", "instructions": QUESTION, "criteria": json.loads(CRITERIA)}}}]
-    assert con.execute("SELECT predicate_key(?, ?)", [QUESTION, CRITERIA]).fetchone() == (calibration.predicate_key(QUESTION, CRITERIA),)
+    assert con.execute("SELECT predicate_key(?, ?)", [QUESTION, CRITERIA]).fetchall()[0] == (calibration.predicate_key(QUESTION, CRITERIA),)
     # With and without criteria are two different predicates, each with its own parameters
     calibration.store(con, b.model, QUESTION, CRITERIA, "t", 1.0, 1.0, 0, 0)
-    with_criteria, without = con.execute("SELECT jev_noulc_cal(json_object('a', 1), ?, ?, 't'), jev_noul_cal(json_object('a', 1), ?, 't')", [QUESTION, CRITERIA, QUESTION]).fetchone()
+    with_criteria, without = con.execute("SELECT jev_noulc_cal(json_object('a', 1), ?, ?, 't'), jev_noul_cal(json_object('a', 1), ?, 't')", [QUESTION, CRITERIA, QUESTION]).fetchall()[0]
     assert with_criteria == pytest.approx(float(calibration.apply(0.25, 1.0, 1.0))) and without == 0.25
     b.close()

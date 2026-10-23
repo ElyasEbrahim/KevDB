@@ -36,8 +36,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
-- The offline tests no longer call `fetchone()` on a relation, which DuckDB 2.0 removed; they call it on the
-  executed query instead, which works with DuckDB 1.5 and 2.0. The package itself did not use it.
+- The offline tests read DuckDB results with `fetchall()` instead of `fetchone()`. DuckDB 2.0 removed `fetchone()` on
+  relations and keeps a result opened by `execute()` unfinished until it is read to the end, which blocks the next query
+  on the connection; `fetchall()` works the same in DuckDB 1.5 and 2.0. The package itself did not use either.
 
 ### Changed
 

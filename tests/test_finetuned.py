@@ -63,8 +63,8 @@ def test_the_fitted_temperature_is_recovered_and_applied_by_the_sql_macro():
     con.execute("CREATE MACRO t_noulc(state, instructions, criteria) AS 0.5")
     calibration.install(con, "t", "finetuned:mine@0")
     T = F.calibrate(con, "finetuned:mine@0", "Same product?", "", "pairs", np.append(p[:4000], np.nan), np.append(y[:4000], 1))
-    labels, b = con.execute("SELECT labels, b FROM semantic_calibration").fetchone()
+    labels, b = con.execute("SELECT labels, b FROM semantic_calibration").fetchall()[0]
     assert labels == 4000 and b == pytest.approx(1 / T)
     for x in (0.01, 0.3, 0.9, 0.999):
-        got = con.execute("SELECT calibrated(?, 'finetuned:mine@0', predicate_key('Same product?', ''), 'pairs')", [x]).fetchone()[0]
+        got = con.execute("SELECT calibrated(?, 'finetuned:mine@0', predicate_key('Same product?', ''), 'pairs')", [x]).fetchall()[0][0]
         assert got == pytest.approx(1 / (1 + np.exp(-np.log(x / (1 - x)) / T)))

@@ -24,18 +24,18 @@ def test_functions_return_typed_answers_and_dedupe(db):
     con, jev, _ = db
     p, label, level = con.execute("""
         SELECT jev_noul(txt, 'Is it urgent?'), jev_choice(json_object('review', txt), 'Which?', '{"x": "X", "y": "Y"}'),
-               jev_score(txt, 'How much?', '["none", "some", "lots"]') FROM t WHERE id = 3""").fetchone()
+               jev_score(txt, 'How much?', '["none", "some", "lots"]') FROM t WHERE id = 3""").fetchall()[0]
     assert 0 <= p <= 1 and label in ("x", "y") and 0 <= level <= 2
     jev.reset()
-    assert con.execute("SELECT count(*) FROM t WHERE jev_noul(txt, 'Is it urgent?') IS NOT NULL").fetchone() == (200,)
+    assert con.execute("SELECT count(*) FROM t WHERE jev_noul(txt, 'Is it urgent?') IS NOT NULL").fetchall()[0] == (200,)
     assert jev.meter.calls == 30  # only 30 distinct texts among the 200 rows
-    assert con.execute("SELECT jev_noul(NULL, 'Is it urgent?')").fetchone() == (None,)
+    assert con.execute("SELECT jev_noul(NULL, 'Is it urgent?')").fetchall()[0] == (None,)
 
     # Several questions packed together: one request per row, P(yes) for each question in order
     jev.reset()
     probs = con.sql("""SELECT jev_nouls(txt, '["Is it urgent?", "Is it long?", "Is it rude?"]') FROM t""").fetchall()
     assert jev.meter.calls == 30 and all(len(p) == 3 and all(0 <= x <= 1 for x in p) for (p,) in probs)
-    assert con.execute("SELECT jev_nouls(NULL, '[]')").fetchone() == (None,)
+    assert con.execute("SELECT jev_nouls(NULL, '[]')").fetchall()[0] == (None,)
 
 
 def test_cheap_filter_runs_before_the_model(db):
@@ -74,10 +74,10 @@ def test_join_blocks_ask_once_per_left_record(db):
     con, jev, _ = db
     jev.reset()
     params = {"a": json.dumps({"name": "a"}), "c": json.dumps([{"name": f"b{i}"} for i in range(4)]), "crit": '{"true": "same", "false": "different"}'}
-    probs, pick = con.execute("SELECT jev_match($a, $c, 'Same as `record_b`?', $crit), jev_pick($a, $c, 'Which one?', 'None of them.')", params).fetchone()
+    probs, pick = con.execute("SELECT jev_match($a, $c, 'Same as `record_b`?', $crit), jev_pick($a, $c, 'Which one?', 'None of them.')", params).fetchall()[0]
     assert jev.meter.calls == 2 and len(probs) == 4 and all(0 <= p <= 1 for p in probs)
     assert 0 <= pick["pos"] <= 4 and 0 <= pick["confidence"] <= 1
     # Rows without candidates send no request; rows with a NULL argument return NULL
-    assert con.execute("SELECT jev_match($a, '[]', 'q', $crit), jev_pick($a, '[]', 'q', 'none'), jev_match(NULL, $c, 'q', $crit), jev_pick($a, NULL, 'q', 'none')", params).fetchone() == (
+    assert con.execute("SELECT jev_match($a, '[]', 'q', $crit), jev_pick($a, '[]', 'q', 'none'), jev_match(NULL, $c, 'q', $crit), jev_pick($a, NULL, 'q', 'none')", params).fetchall()[0] == (
         [], {"pos": 0, "confidence": None}, None, None)
     assert jev.meter.calls == 2
