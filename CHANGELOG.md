@@ -16,6 +16,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   `p10_report.py` (temperature, lines, bootstrap), `p10_run.sh` (one command per model or phase, pre-flight checks,
   memory watchdog, resume), `p10_kev_train.py` (Kev's MPS shape padding applied during training) and `p10_memprobe.sh`
   (training memory probe), with offline tests.
+- `kevdb.finetuned` and `scripts/serve_finetuned.sh`: serve a Kev run you fine-tuned yourself and use it as a backend. The
+  cache name follows the weights, a server serving another run is refused, and a temperature fitted on your own labels is
+  stored in the calibration table and applied in SQL. Documented in `docs/open-models.md`.
+- Phase 11 of the database experiments, run and analysed: why fine-tuning did not help Kev-4B on dblp-acm. Rewording the
+  product question changes nothing; another publication dataset asked with the same question, or three other domains
+  with their own questions, brings Kev-4B to Jev's level there. Scripts `experiments/database/p11_*`, protocol and
+  execution record in `experiments/database/protocol/p11.txt`.
+- Phase 12 of the database experiments, run and analysed: how many of your own labels Kev-4B needs to reach Jev's
+  zero-shot level on unseen records. None on product data like the public training data, about 100 for the
+  publication question, 300 on all four datasets. Scripts `experiments/database/p12_*`, protocol and execution record in
+  `experiments/database/protocol/p12.txt`.
+- Phase 13 of the database experiments, run and analysed: are phase 10's close verdicts stable to the training seed? Three
+  of four hold; Kev-4B on amazon-google turns on par with other seeds, and Kev-0.8B's forgetting on movie reviews does not
+  recur. Scripts `experiments/database/p13_*`, protocol and execution record in `experiments/database/protocol/p13.txt`.
+- Phase 14 of the database experiments, run and analysed: Kev-0.8B's drop on movie reviews belongs to phase 10's seed 1
+  (it returns when that seed is retrained through the padding launcher), and the padding changes no result. Scripts
+  `experiments/database/p14_*`, protocol and execution record in `experiments/database/protocol/p14.txt`.
 
 ### Changed
 

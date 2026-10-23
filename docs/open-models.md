@@ -76,6 +76,44 @@ calibration.install(con, "kev", kev.model)      # kev_noul_cal, kev_noulc_cal, c
 
 See [sql-functions.md](sql-functions.md) for the functions and [batch-pipeline.md](batch-pipeline.md) for the CLI.
 
+### A checkpoint you fine-tuned
+
+A run directory written by `kev.train` (for example phase 10's `open_models/p10/kev-4b/all`) has its own server script and is
+registered like any other backend:
+
+```bash
+./scripts/serve_finetuned.sh open_models/p10/kev-4b/all      # port 8016; a second run can listen on another port
+```
+
+```python
+from kevdb.finetuned import calibrate, finetuned_backend
+
+mine = finetuned_backend("open_models/p10/kev-4b/all")       # refuses a server that serves another run
+register(con, "mine", mine)
+calibration.install(con, "mine", mine.model)
+# p: the run's answers to 100-200 held-out, human-labelled rows of this predicate; y: their labels.
+# instructions and criteria are the same strings you pass to mine_noulc
+calibrate(con, mine.model, instructions, criteria, "pairs", p, y)
+```
+
+It differs from the released models in three ways:
+
+- The cache name carries a digest of the weights, so a retrained run never reuses an earlier run's answers.
+- `kev.serve` silently serves another run when the one asked for has no `head.pt`, which is why `finetuned_backend` checks the
+  run the server reports.
+- A fine-tuned run is served at temperature 1.0. `calibrate` fits its temperature on held-out human labels (Kev's own fit, as in
+  phases 10–12), and `mine_noulc_cal` applies it.
+
+The SQL macro clips probabilities to [0.001, 0.999] before rescaling them, so `calibrate` fits on the same clip. A fine-tuned
+matching model puts most answers beyond it, so the temperature can differ from the one the experiments report, which were
+fitted on a clip of 0.00005. On phase 13's Kev-0.8B walmart-amazon checkpoint (seed 2), 81% of the pool answers lie beyond
+the clip, and the temperature is 1.59 here against 1.82 in the experiment. Both lower the Brier score. On that checkpoint
+served by `serve_finetuned.sh`, the SQL answers to 300 test pairs were identical to the experiment's, and a server serving
+another run was refused (checked on 2026-10-23).
+
+To train on a Mac, run `experiments/database/p10_kev_train.py kev.train …` instead of `python -m kev.train`. It applies phase 10's
+fix that keeps memory flat. `experiments/database/p12_train.sh` follows the author's recipe for your own data.
+
 ## Which model to use
 
 Measured on a MacBook Pro, M3 Max, 64 GB ([phases 6 and 7](../experiments/database/README.md)):
@@ -99,8 +137,17 @@ Practical guidance from the experiments:
 - **Verify packing per predicate.** Packing several questions into one request changes answers for some predicates.
 - **Fine-tune Kev-4B for product matching if you have public or own labels** ([phase 10](../experiments/database/README.md#phase-10-does-fine-tuning-on-public-matching-data-bring-kev-to-jevs-zero-shot-level)).
   6,000 human-labelled pairs from three other product and publication datasets brought it to Jev's zero-shot level on two
-  of four unseen datasets, mostly by removing false matches, without forgetting its other tasks. It does not help for a
-  matching task asked with a question that never appeared in training, and Kev-0.8B forgets slightly.
+  of four unseen datasets, mostly by removing false matches, without forgetting its other tasks. Trained on product pairs
+  only, it does not help for a matching task asked with a question that never appeared in training; mixing in labelled
+  pairs of other kinds with their own questions, or a dataset asked with the same question, does
+  ([phase 11](../experiments/database/README.md#phase-11-why-did-fine-tuning-not-help-kev-4b-on-dblp-acm)).
+  Kev-0.8B's slight forgetting in phase 10 belongs to its seed: other seeds do not show it, the same seed does again
+  ([phase 14](../experiments/database/README.md#phase-14-is-kev-08bs-drop-on-movie-reviews-a-property-of-seed-1-or-of-training-without-padding)).
+  Check the tasks you care about after training. When a fine-tuned checkpoint lands near your
+  bar, train another seed before deciding ([phase 13](../experiments/database/README.md#phase-13-are-phase-10s-close-verdicts-stable-when-only-the-training-seed-changes)).
+- **With labels of your own data, about 300 are enough** ([phase 12](../experiments/database/README.md#phase-12-how-many-of-your-own-labels-does-kev-4b-need)).
+  Fine-tuned on 240 of them, with 60 kept aside for the temperature, Kev-4B is on par with Jev on all four matching
+  datasets, on records none of the labels contains. That takes 15–20 minutes of training on a Mac.
 
 ## Troubleshooting
 

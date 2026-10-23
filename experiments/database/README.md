@@ -14,7 +14,7 @@ was collected. Results added after seeing the data are marked as post hoc.
 
 ## Summary
 
-**Open models (phases 6–10)**
+**Open models (phases 6–14)**
 
 - **No open model replaces Jev out of the box.** Of the five models that run on a 64 GB Mac, none passes the
   pre-registered criteria. Kev-4B, Kev-9B and Clef-flash match Jev on movie reviews, are all behind on restaurant
@@ -46,6 +46,19 @@ was collected. Results added after seeing the data are marked as post hoc.
   asked a publication question no training record contains, it does not improve at all. Kev-0.8B matches on one of four
   and forgets slightly on movie reviews. Trained with in-domain labels, Kev-4B's F1 is above Jev's on all four test sets.
   Neither model meets the pre-registered verdict, which needs all four (phase 10).
+- **What blocked the new question was training data of one kind, not its wording.** Rewording the product question
+  changes nothing. Adding 2,000 pairs of another publication dataset asked with the same question, or 1,156 pairs of
+  beer, restaurants and songs with their own questions, brings Kev-4B to Jev's level on dblp-acm (F1 0.962 and 0.945,
+  Jev 0.973) without forgetting (phase 11).
+- **With 300 labels of your own data, Kev-4B is on par with Jev on all four matching datasets**, measured on records no
+  label contains. On product data like its public training data it needs none, on the publication question about 100.
+  The public-label stage matters only below that: at 300 labels the released checkpoint with the author's recipe does as
+  well. On the hardest product set F1 stays below Jev's (0.701 against 0.744 at 1,000 labels) (phase 12).
+- **Verdicts near a line depend on the training seed.** With two more seeds, three of phase 10's four close verdicts
+  hold, but Kev-4B on amazon-google turns from below to on par (at the edge). Kev-0.8B's slight forgetting on movie
+  reviews does not recur with the new seeds (phase 13). It belongs to one training draw: retrained with seed 1 through
+  the padding launcher, it comes back unchanged, so the padding fix changes nothing and seed 1's record order and replay
+  sample decide it (phase 14).
 
 **Jev and LLMs (phases 0–5)**
 
@@ -833,6 +846,206 @@ Cost: none (local training and serving; Jev's column comes from the answers cach
 including the runs that were stopped and excluding the pause: Kev-0.8B about 12 h, Kev-4B about 30 h (five training runs
 of 5–6 h, evaluation 4–45 min per checkpoint), spread over five days in phases started by the owner.
 
+### Phase 11: why did fine-tuning not help Kev-4B on dblp-acm?
+
+In phase 10, Kev-4B fine-tuned on 6,000 product pairs did not improve at all on dblp-acm, a publication dataset asked
+with a question no training record contains (F1 0.742 before and after), and it stayed too strict: 167 missed matches,
+Jev 1. This phase asks which missing ingredient explains that. Criteria: [protocol/p11.txt](protocol/p11.txt), frozen
+before any phase 11 checkpoint existed, with the execution record at its end.
+
+Each arm keeps phase 10's loo-dblp-acm training data (2,000 pairs each of abt-buy, amazon-google and walmart-amazon,
+plus 2,000 replayed records) and its settings, and changes one thing:
+
+- **words**: the same 6,000 pairs, each asked with one of five wordings of the product question that mean the same.
+  Does the model learn the wording rather than the task?
+- **domains**: plus every training pair of three other Magellan domains, each asked with its own question: beer (268
+  pairs), restaurants (567) and songs (321).
+- **pubs**: plus 2,000 pairs of DBLP-GoogleScholar, asked with exactly dblp-acm's publication question (12 pairs that
+  share a record with dblp-acm's test split were dropped first).
+
+The control is phase 10's loo-dblp-acm checkpoint, not retrained. Lines on dblp-acm's full test split (2,473 pairs): P1,
+F1 above the released checkpoint; P2, F1 above the control (95% paired-bootstrap interval of the difference above zero);
+T, on par with Jev by phase 6's rule; G, phase 10's guard. The added data come from the Ditto repository at the commit
+phase 10 used. Only human labels were used.
+
+**Result: the wording is not the problem. Two other ingredients each bring Kev-4B to Jev's level on dblp-acm: another
+publication dataset asked with the same question (F1 0.962), and, against the expectation written before the run, three
+other kinds of record asked with their own questions (0.945). Jev's F1 is 0.973.**
+
+| On dblp-acm | Accuracy / AUC / Brier / F1 | False / missed matches | F1 minus control (95% CI) | P1 | P2 | T | G |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Jev, zero-shot | 99.0% / 0.999 / 0.009 / 0.973 | 24 / 1 | | | | | |
+| Kev-4B released | 92.0% / 0.985 / 0.045 / 0.742 | 39 / 159 | | | | | |
+| control (phase 10) | 92.2% / 0.990 / 0.060 / 0.742 | 26 / 167 | | | | below | met |
+| words | 92.3% / 0.991 / 0.056 / 0.745 | 23 / 167 | +0.003 (−0.003 to +0.009) | no | no | below | met |
+| domains | 97.9% / 0.995 / 0.018 / 0.945 | 47 / 4 | **+0.204** (+0.166 to +0.239) | yes | yes | **on par** | met |
+| pubs | 98.6% / 0.996 / 0.014 / 0.962 | 23 / 11 | **+0.221** (+0.185 to +0.255) | yes | yes | **on par** | met |
+
+- **Rewording one question does not teach a new one.** words cannot be told apart from the control: the same 167
+  missed matches, F1 +0.003.
+- **The publication question with publication records almost closes the gap.** pubs misses 11 matches instead of 167;
+  its accuracy is 0.4 points below Jev's, and its F1 0.010 below (−0.021 to −0.000).
+- **So does variety without any publication data.** domains adds 1,156 pairs of beer, restaurants and songs. It misses
+  only 4 matches, but calls more non-matching pairs a match (47; control 26, Jev 24) and meets T by a smaller margin
+  (accuracy −1.1 points, Brier +0.009).
+- **No arm forgets.** The largest guard drop is 1.1 points (words, on movie reviews); every set passes.
+- **End to end on phase 8's dblp-scholar table** (words and domains only, because pubs trains on the same source): F1
+  91.5% and 91.0%, against 91.0% for the control, 88.5% for the released checkpoint and 90.4% for Jev. That task, asked
+  with phase 8's own question, was already solved in phase 10.
+- **Against the expectations written before the run**: pubs (P1, P2 and T met, far fewer missed matches) and words (P2
+  not met, F1 within 0.02 of the control) came out as expected, and G held everywhere. domains was expected not to meet
+  P2 and did.
+
+**What it means for `kevdb`.** Phase 10's failure was not about how the product question is worded. Trained on one
+question only, Kev-4B stays as strict on a new question as it was released. Adding the target question with similar
+records, or a few other questions with other kinds of records, removes that strictness; 1,156 extra pairs were enough.
+When fine-tuning Kev for your own matching data, mix in labelled data of more than one kind, and if you can, a dataset
+asked with the question you will use.
+
+Cost: none. Machine time 18.6 h in one go: training 5.0–6.1 h per arm, evaluation 23–36 min.
+
+### Phase 12: how many of your own labels does Kev-4B need?
+
+Phase 10 measured what public labels from other datasets do. A user usually has some labels of their own data as well.
+This phase asks how many Kev-4B needs to reach Jev's zero-shot level on a matching dataset it has not seen, measured on
+records that no label contains. Criteria: [protocol/p12.txt](protocol/p12.txt), frozen before any phase 12 checkpoint
+existed, with the execution record at its end.
+
+Each dataset's records are split in two halves by a hash of the record's text.
+- **Test pairs:** both records on the test side, taken from the test split and from the 600 validation pairs Jev was
+  asked; 632–766 pairs per dataset, 59–152 matches.
+- **Labels:** training-split pairs whose two records are both on the label side, in budgets of 100, 300 and 1,000. The
+  budgets are nested, and each one's last 20% fits the temperature.
+- **Training:** the author's recipe for your own data (`--init_from`, 2 epochs, learning rate 2e-5, effective batch 8,
+  nothing replayed).
+- **Starting points:** main runs start from phase 10's loo-D checkpoint, which has never seen D, so at n = 0 it is
+  phase 10's model. Reference runs start from the released checkpoint, at n = 300 and 1,000.
+- **Line n\*:** the smallest budget at which the run is on par with Jev by phase 6's rule (accuracy, AUC and Brier;
+  F1 is not part of the rule) and passes phase 10's guard.
+
+**Result: no own labels for abt-buy and walmart-amazon, 100 for dblp-acm, 300 for amazon-google.** At 300 labels
+either starting point is on par with Jev on all four datasets, without forgetting.
+
+F1 on the test pairs ("par" = on par with Jev by the rule, "below" = not):
+
+| Dataset | Jev | n = 0 | 100 | 300 | 1,000 | released, n = 0 | released + 300 | released + 1,000 | n\* |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| abt-buy | 0.959 | 0.950 par | 0.868 par | 0.943 par | 0.967 par | 0.861 below | 0.934 par | 0.950 par | **0** |
+| walmart-amazon | 0.882 | 0.889 par | 0.908 par | 0.868 par | 0.913 par | 0.709 below | 0.842 par | 0.900 par | **0** |
+| dblp-acm | 0.974 | 0.751 below | 0.956 par | 0.984 par | 0.993 par | 0.764 below | 0.974 par | 0.990 par | **100** |
+| amazon-google | 0.744 | 0.663 below | 0.348 below | 0.646 par | 0.701 par | 0.603 below | 0.576 par | 0.667 par | **300** |
+
+- **Product data like the public labels need none.** On abt-buy and walmart-amazon phase 10's checkpoint is already on
+  par on records it never saw, and every budget keeps it there.
+- **A new question needs about 100.** On dblp-acm, 80 trained labels take F1 from 0.751 to 0.956; with 300 it is
+  above Jev's (0.984 against 0.974).
+- **The hardest product set needs 300, and its F1 stays below Jev's.** On amazon-google, 100 labels first made the
+  model stricter: it missed 50 of 66 matches (F1 0.348). With 300 it is on par by the rule's accuracy, AUC and Brier,
+  but its F1 is still 0.098 lower (0.646 against 0.744), and 0.042 lower at 1,000.
+- **The public-label stage pays only when you have few labels of your own.** At n = 0 phase 10's checkpoint is far
+  ahead of the released one on the product datasets (F1 +0.06 to +0.18). At 300 and 1,000 labels the two starting
+  points cannot be told apart: the largest difference is +0.069 (−0.000 to +0.138, amazon-google at 300).
+- **No forgetting without replay.** Every run passes the guard; the largest drop is 1.5 points.
+- **The small temperature slice does not decide anything.** Fitted on 20–200 held-out labels, the temperature hit the
+  grid's lower bound (0.25) at n = 100 on abt-buy and walmart-amazon. Scoring every run with its starting point's
+  temperature instead changes no verdict.
+- **Against the expectations written before the run**:
+  - **Held:** n\* = 0 on abt-buy and walmart-amazon, 100 to 300 on dblp-acm, and the guard holding everywhere.
+  - **Missed:** amazon-google was expected to need 1,000 or more and needed 300. Phase 10's starting point was expected
+    to stay clearly ahead at 300 labels, and is not ahead on any dataset.
+
+**What it means for `kevdb`.** With no labels of your own, start from a checkpoint fine-tuned on public matching data.
+It is already on par with Jev on product data like its training data, though not on a new kind of question. With about
+300 labels of your own (240 to train on, 60 to fit the temperature), the author's recipe reaches Jev's level on all four
+datasets from either starting point, in about 15–20 minutes of training on this Mac.
+
+Cost: none. Machine time 14.1 h in one go: training 5–7, 14–20 and 47–66 min at 100, 300 and 1,000 labels, evaluation
+about 12 min per run.
+
+### Phase 13: are phase 10's close verdicts stable when only the training seed changes?
+
+Phase 10 trained each checkpoint once, with seed 1. Several of its verdicts sit within a hair of a line, so another seed
+might move them across it. The seed changes the order of the training records, the LoRA dropout draws and which 2,000
+records of Kev's own training set are replayed. Criteria: [protocol/p13.txt](protocol/p13.txt), frozen before any phase 13
+checkpoint existed, with the execution record at its end.
+
+**Which arms.** A rule fixed before the run picks the close ones: every quantity that decides the verdict lies within a
+quarter of the line's width of it. That is 0.5 points for accuracy and the guard, 0.005 for AUC and Brier. Three of
+Kev-0.8B's arms meet it: amazon-google, walmart-amazon and dblp-acm. Kev-4B's amazon-google does not (its Brier was 0.008
+past the line), but it was the nearest Kev-4B verdict and is reported apart.
+
+**How.** Each arm is trained again with seeds 2 and 3, everything else as in phase 10, and judged exactly as phase 10
+judged it. Scored this way, seed 1 reproduces phase 10's published numbers.
+
+**Result: three of the four verdicts hold for all three seeds; Kev-4B on amazon-google does not. Phase 10 judged it
+below Jev, and seeds 2 and 3 are on par.**
+
+| Arm | Seed 1 (phase 10) | Seed 2 | Seed 3 | Over the seeds |
+| --- | --- | --- | --- | --- |
+| Kev-0.8B, walmart-amazon | on par | on par | on par | stable, on par |
+| Kev-0.8B, amazon-google | below: AUC −0.021, guard | below: AUC −0.021 | below: AUC −0.020 | stable, below |
+| Kev-0.8B, dblp-acm | below: guard | below: accuracy −2.4 | below: accuracy −2.3 | stable, below |
+| Kev-4B, amazon-google (outside the rule) | below: accuracy −2.2, Brier +0.028 | on par (accuracy −1.4, Brier +0.020) | on par (accuracy −1.1, Brier +0.019) | **not stable** |
+
+- **Kev-4B's amazon-google verdict depends on the seed.** Seeds 2 and 3 are on par, but at the edge: Brier +0.0199
+  and +0.0192 against a line of +0.02. Phase 10's "2 of 4" for Kev-4B would be "3 of 4" with either of them.
+- **The spread across seeds is enough to flip a verdict at the line.** Accuracy moves by up to 1.1 points, Brier by
+  up to 0.009 and F1 by up to 0.027.
+- **Kev-0.8B's verdicts hold, though one for another reason.** On dblp-acm, seed 1 fails only the guard; seeds 2 and
+  3 pass the guard but fall 2.3–2.4 points short on accuracy.
+- **Kev-0.8B's forgetting on movie reviews did not recur.** In phase 10, all five Kev-0.8B checkpoints (seed 1) were
+  2.0–2.4 points below the released checkpoint on movie reviews. All six checkpoints here are 1.7 points below to 0.3
+  above, and pass the guard. That is a systematic difference, not seed-to-seed noise. It has two possible sources:
+  - seed 1 itself: its record order and replay sample are shared by every phase 10 arm;
+  - the padding launcher of phase 10's rule-8 fix, which seeds 2 and 3 went through and Kev-0.8B's seed-1 runs predate.
+
+  This phase cannot separate them, so phase 10's "Kev-0.8B forgets slightly" is not a robust finding.
+- **Against the expectations written before the run**: walmart-amazon was expected to flip and held on par. On
+  amazon-google and dblp-acm the guard did flip as expected, but the verdict stayed below for another reason. Kev-4B
+  was expected to stay below and did not. The F1 spread stayed within the expected 0.03; the accuracy spread slightly
+  exceeded the expected 1 point (1.1 points on two arms).
+
+**What it means for `kevdb`.** A single fine-tuning run settles a verdict only when it is clear of the line by more
+than about a point of accuracy or 0.01 of Brier. When a fine-tuned checkpoint lands near your bar, train another seed
+before deciding.
+
+Cost: none. Machine time 21.1 h in one go: Kev-0.8B 1.6–1.7 h of training per run, Kev-4B 5.1 h, evaluation 4–18 min.
+
+### Phase 14: is Kev-0.8B's drop on movie reviews a property of seed 1 or of training without padding?
+
+In phase 13, Kev-0.8B's seeds 2 and 3 were 1.3 points better than phase 10's seed 1 on the movie-review guard (95%
+interval +0.4 to +2.1). They also differed in a second way: they went through the padding launcher of phase 10's rule-8
+fix, and Kev-0.8B's seed-1 runs predate it. Under one seed, the order of the training records and the 2,000 replayed
+records are fixed, and padding leaves them unchanged. So phase 14 trains seed 1 again through the launcher, on phase
+13's three arms. Criteria: [protocol/p14.txt](protocol/p14.txt), frozen before any phase 14 checkpoint existed.
+
+The reading uses the mean over the three arms of the movie-review accuracy, padded seed 1 minus phase 10's seed 1, with
+one 95% interval from resampling the review texts. If the interval contains zero, the drop belongs to seed 1 (A). If it
+lies above zero, the drop came with training without padding (B).
+
+**Result: A. Padded seed 1 cannot be told apart from phase 10's seed 1 (−0.0 points, −0.1 to +0.1), so the drop belongs
+to seed 1 itself, as expected before the run.**
+
+| Movie-review guard (points against the released checkpoint) | amazon-google | walmart-amazon | dblp-acm |
+| --- | --- | --- | --- |
+| Seed 1, phase 10 (no padding) | −2.4 | −2.0 | −2.3 |
+| Seed 1, padded (phase 14) | −2.4 | −2.1 | −2.2 |
+| Seeds 2 and 3, padded (phase 13) | −1.7 / −0.8 | −1.7 / −0.3 | −1.6 / +0.3 |
+
+- **The slight forgetting is real, but it belongs to one training draw.** With seed 1 it reproduces, about 2.2 points
+  below the released checkpoint; with seeds 2 and 3 it does not. Which records are replayed and in what order decides
+  it. The share of sentiment records among the replayed ones does not: seed 3 replays fewer than seed 1 and passes.
+- **Padding leaves the results unchanged.** The padded seed-1 checkpoints reproduce the unpadded ones: the same fitted
+  temperatures, accuracy within 0.25 points, AUC within 0.002, Brier within 0.002 and F1 within 0.009. This also
+  confirms that phase 10's rule-8 fix did not change any Kev-4B result.
+- **One verdict sat on a single judgement.** Kev-0.8B's walmart-amazon passed the guard in phase 10 at exactly −2.0.
+  Padded seed 1 lands at −2.1, so this arm turns from on par to below; the other two arms keep their verdicts.
+
+**What it means for `kevdb`.** The Kev-0.8B checkpoint you get from one fine-tuning run may lose about 2 points on an
+unrelated task, or may not. Check the tasks you care about after training, and train another seed if one drops.
+
+Cost: none. Machine time 5.2 h in one go: training 1.6–1.7 h per run, evaluation 4–5 min.
+
 ## Limitations
 
 - Two datasets and one LLM as upper model. The published systems' times and costs were measured in 2025 with Gemini 2.5
@@ -875,6 +1088,20 @@ of 5–6 h, evaluation 4–45 min per checkpoint), spread over five days in phas
   arm's test splits share most of their records with its training data. Kev-0.8B was trained without and Kev-4B with the
   shape padding of the rule-8 fix below, so the two models also differ in their random dropout draws. The recorded
   training time of Kev-4B's loo-abt-buy includes a 37.6-hour pause.
+- Phase 11: one seed per arm and one held-out dataset. domains adds new kinds of record and new questions at once, so it
+  cannot say which of the two helps. domains and pubs also add 1,156 and 2,000 training pairs, and no arm with as many
+  extra product pairs was run. DBLP-GoogleScholar shares its DBLP side with dblp-acm: pairs with a record that occurs
+  verbatim in dblp-acm's test split were dropped, but the same paper can appear written differently. The three new
+  questions are first drafts.
+- Phase 12: one seed per run; the test sets are small (59–152 matches), so F1 intervals span ±0.04–0.10, and n\* is
+  only resolved to the budgets 0, 100, 300 and 1,000. The released starting point was run at 300 and 1,000 only. The split
+  keeps records written identically on one side, but the same product written differently can fall on both. The test
+  pairs include only the 600 validation pairs Jev was asked, because answering the rest would have needed paid requests.
+- Phase 13: two more seeds per arm only, and four arms. Kev-0.8B's seeds 2 and 3 also went through the padding launcher,
+  which its seed-1 runs predate, so a difference between them may come from either. Phase 10's five checkpoints share
+  seed 1 and are therefore not independent draws.
+- Phase 14: three arms and one model. It separates seed 1 from the padding, not the replay sample from the record order,
+  which one seed fixes together.
 - Phase 9: 128 reviews of one movie and one pair of opposite questions; the truth is the critics' overall verdict, not the
   text's sentiment, so no form reaches a high F1. Pairs are not independent, so intervals resample reviews. Kev-4B ran one
   question and one k. Times measured once. Packing with the second review kept in the state (phase 8's S) was not tested,
@@ -927,6 +1154,18 @@ The primary analysis, success criteria and stopping rules of each phase were wri
   the memory guard stopped Kev-4B's first loo-abt-buy run, retrained after the fix (rule 7); the owner paused Kev-4B's
   loo-abt-buy for 37.6 hours by freezing its processes and resumed them, so the same computation continued. Every arm of
   both models was collected with no unanswered request and no failed server. All of it is recorded in protocol/p10.txt.
+- Phase 11 ran without deviation: in one go (18.6 h), no interruption, no unanswered request, no failed server. The
+  domains result contradicts the expectation written before the run and is reported as measured.
+- Phase 12 ran without deviation: in one go (14.1 h), no interruption, no unanswered request, no failed server. The
+  owner's first "start" came while phase 11 was still running. A start queued for after phase 11 was stopped on the
+  owner's word before it had started anything, and the rehearsal and run followed the owner's next instruction.
+- Phase 13 ran without deviation: in one go (21.1 h), no interruption, no unanswered request, no failed server. Before
+  the freeze, the layout of the analysis' reading lines was fixed after the rehearsal; no number or rule changed.
+- Phase 14 ran without deviation: in one go (5.2 h), no interruption, no unanswered request, no failed server. Before
+  its rehearsal there was a false start. The training script, copied from phase 13's, still tested phase 13's rehearsal
+  variable, so the first rehearsal run loaded phase 10's real training file. It was stopped 35 s in, before any training
+  step, with nothing saved or asked. The script was fixed, a test now checks every phase's rehearsal variable, and the
+  rehearsal was repeated from empty folders. All of it is recorded in protocol/p14.txt.
 - The follow-up's size was set by the remaining balance. OpenRouter reserves credit per in-flight request based on its
   output limit and rejects concurrent requests when the balance is low, so collection took three runs (lower output
   limit, less concurrency, waiting after rejections); no answer was analysed between them.
@@ -994,10 +1233,27 @@ P7_NO_REPORT=1 ./experiments/database/p7_run.sh --model kev-0.8b && P7_MODEL=kev
 ./experiments/database/p10_run.sh --model kev-0.8b                # about 10 h on an M3 Max with 64 GB; out/database/p10/kev-0.8b/report.txt
 ./experiments/database/p10_run.sh --model kev-4b                  # about 29 h; split into phases with --arms (protocol/p10_plan.md, section 6a)
 # since the rule-8 fix every training run is padded (p10_train.sh calls p10_kev_train.py); the recorded Kev-0.8B run was not
+
+# Phase 11: why fine-tuning did not help Kev-4B on dblp-acm. Uses Kev-4B and phase 10's data and results; no API key, free
+./experiments/database/p11_fetch.sh                               # eight files of four more Magellan datasets, about 8.4 MB
+./experiments/database/p11_run.sh --rehearsal                     # optional: the whole run on made-up rows, about 20 min
+./experiments/database/p11_run.sh                                 # about 18.6 h on an M3 Max with 64 GB; out/database/p11/kev-4b/report.txt
+
+# Phase 12: how many of your own labels Kev-4B needs. Uses Kev-4B, phase 10's data and its four loo checkpoints; no API key, free
+./experiments/database/p12_run.sh --rehearsal                     # optional: the whole run on made-up rows, about 1 h
+./experiments/database/p12_run.sh                                 # about 14 h on an M3 Max with 64 GB; out/database/p12/kev-4b/report.txt
+
+# Phase 13: seeds 2 and 3 for phase 10's close arms. Uses phase 10's data and results; no API key, free
+./experiments/database/p13_run.sh --rehearsal                     # optional: the whole run on made-up rows, about 20 min
+./experiments/database/p13_run.sh                                 # about 21 h on an M3 Max with 64 GB; out/database/p13/report.txt
+
+# Phase 14: Kev-0.8B's seed 1 again, through the padding launcher. Uses phase 10's data and the results of phases 10 and 13; no API key, free
+./experiments/database/p14_run.sh --rehearsal                     # optional: the whole run on made-up rows, about 7 min
+./experiments/database/p14_run.sh                                 # about 5.2 h on an M3 Max with 64 GB; out/database/p14/report.txt
 ```
 
 The actual cost of running everything: Jev about $3.4 (plus $0.45 for phase 6, $0.03 for phase 7, $1.29 for phase 8,
-$1.31 for phase 9; phase 10 used no paid service), OpenRouter $19.97 (the whole $20 top-up). Results go to `out/database/` (not committed), with a
+$1.31 for phase 9; phases 10–14 used no paid service), OpenRouter $19.97 (the whole $20 top-up). Results go to `out/database/` (not committed), with a
 `report.txt` or similarly named text file per phase.
 
 ## Report
