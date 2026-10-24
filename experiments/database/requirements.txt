@@ -1,5 +1,5 @@
 # Exact versions used for the database experiments (2026-10-07, Python 3.14). Normally installing the experiments extra from pyproject is enough:
-#   pip install -e ".[dev,database]"
+#   pip install -e ".[dev,experiments]"
 # use this file only for an exact reproduction: with a different pandas version, SemBench's sampling script picks different rows.
 duckdb==1.5.6
 pyarrow==25.0.1   # DuckDB's vectorised Python functions receive data in Arrow batches

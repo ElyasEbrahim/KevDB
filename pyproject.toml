@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kevdb"
-version = "0.1.0"
+version = "0.2.0"
 description = "Semantic SQL in DuckDB powered by open-source decision models, benchmarked against the Jev API and generative LLMs"
 readme = "README.md"
 license = "MIT"
@@ -24,7 +24,9 @@ dependencies = ["httpx>=0.27", "duckdb>=1.5", "pyarrow>=25", "numpy>=2"]
 dev = ["pytest>=8"]
 # Analysis scripts in experiments/ and the scripts bundled with SemBench.
 # The exact versions used for the published results are pinned in experiments/database/requirements.txt.
-experiments = ["pandas>=3", "scipy>=1.18", "scikit-learn>=1.9", "matplotlib>=3.11"]
+# The experiment scripts were run on DuckDB 1.5 and are not changed for DuckDB 2.0, which keeps an unread execute()
+# result open and blocks the next query; the kevdb package itself works with both.
+experiments = ["duckdb>=1.5,<2", "pandas>=3", "scipy>=1.18", "scikit-learn>=1.9", "matplotlib>=3.11"]
 # experiments/query_plan/ talks to PostgreSQL.
 query_plan = ["psycopg[binary]>=3.2"]
 

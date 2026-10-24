@@ -88,7 +88,9 @@ cp .env.example .env                 # TYPESAFE_API_KEY and OPENROUTER_API_KEY, 
 .venv/bin/python -m pytest -q        # offline tests, no model calls
 ```
 
-The exact package versions used are in [requirements.txt](requirements.txt).
+The exact package versions used are in [requirements.txt](requirements.txt). The experiment scripts were run on DuckDB
+1.5.6, and the `experiments` extra keeps DuckDB below 2.0: DuckDB 2.0 leaves a result opened by `execute()` unfinished
+until it is read to the end, which some scripts here do not do. The `kevdb` package and its tests work with 1.5 and 2.0.
 
 Jev always goes through the official API, pinned to `jev-1.13.0`. LLMs go through OpenRouter with the provider pinned
 on every route and no fallback ([src/kevdb/routes.py](../../src/kevdb/routes.py)): unpinned, six requests to one model
