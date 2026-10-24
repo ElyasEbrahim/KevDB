@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
 
-[Chinese introduction](README.zh-CN.md)
+[Chinese introduction](README.zh-CN.md) · New here? [docs/overview.md](docs/overview.md) lists every experiment: what it does, on which data, with what result.
 
 A *decision model* does not generate text. It reads a record (the *state*) and answers typed questions about it with
 probabilities: yes/no (`noul`), pick one option (`choice`), or rate on a scale (`score`). That makes it a natural
