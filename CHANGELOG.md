@@ -6,8 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-24
+
 ### Added
 
+- `docs/overview.md`: one page for new readers listing every experiment, what it does, its data and its result.
 - Phase 10 of the database experiments, run and analysed: fine-tuning Kev-4B and Kev-0.8B on public, human-labelled
   record-matching pairs, leave one dataset out. Kev-4B reaches Jev's zero-shot level on 2 of 4 unseen datasets, Kev-0.8B
   on 1 of 4; results in `experiments/database/README.md`, protocol and execution record in
@@ -42,6 +45,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- The PDF report (`experiments/database/report/Jev-databases-report.pdf`) covers phases 0–14: part II adds open
+  decision models as the backend (phases 6–9) and fine-tuning Kev for record matching (phases 10–14), with two new
+  figures.
+- The `experiments` extra requires DuckDB below 2.0, the version line the experiment scripts were run and checked on.
+  The `kevdb` package itself still accepts DuckDB 1.5 and 2.0.
 - `experiments/database/p10_train.sh` trains through `p10_kev_train.py`, which keeps a long training run's memory flat on
   Apple GPUs.
 

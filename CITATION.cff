@@ -6,8 +6,8 @@ authors:
   - alias: ElyasEbrahim
 repository-code: "https://github.com/ElyasEbrahim/KevDB"
 license: MIT
-version: 0.1.0
-date-released: 2026-10-14
+version: 0.2.0
+date-released: 2026-10-24
 keywords:
   - decision models
   - semantic SQL
