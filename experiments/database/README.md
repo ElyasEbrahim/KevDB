@@ -1258,5 +1258,6 @@ $1.31 for phase 9; phases 10–14 used no paid service), OpenRouter $19.97 (the 
 
 ## Report
 
-The report covering phases 0–5 is [report/Jev-databases-report.pdf](report/Jev-databases-report.pdf), built from
-`report/report.en.md` with `./experiments/database/report/build.sh` (needs pandoc and TeX Live).
+The report covering phases 0–14 (part I: Jev on DuckDB, phases 0–5; part II: open decision models and fine-tuning,
+phases 6–14) is [report/Jev-databases-report.pdf](report/Jev-databases-report.pdf), built from `report/report.en.md` with
+`./experiments/database/report/build.sh` (needs pandoc and TeX Live).
