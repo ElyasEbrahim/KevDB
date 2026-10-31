@@ -21,6 +21,8 @@ stopping rules written before the run, followed by notes on deviations appended 
 | `p12.txt` | with how many of their own labels does Kev-4B reach Jev's zero-shot level on a matching dataset it has not seen? (written 2026-10-20, frozen and run 2026-10-21 to 2026-10-22; the execution record is appended at its end) |
 | `p13.txt` | are phase 10's close verdicts stable when only the training seed changes? (arms chosen by a rule on 2026-10-20, frozen and run 2026-10-22 to 2026-10-23; the execution record is appended at its end) |
 | `p14.txt` | is Kev-0.8B's drop on movie reviews in phase 10 a property of seed 1 or of training without padding? (written, frozen and run 2026-10-23; a false start before the rehearsal and the execution record are appended at its end) |
+| `p16.txt` | can the query decide which rows get the expensive answer? (written and frozen 2026-10-31 before any design was run on real labels, then run; one deviation and the execution record are appended at its end) |
+| `p16_plan.md` | phase 16 plan, with the check of earlier work in the papers' own text. `p16.txt` prevails on criteria |
 
 ## Paths and checksums
 

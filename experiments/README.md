@@ -16,6 +16,7 @@ limitations and the exact commands to reproduce them.
 | 12 | How many of your own labels does Kev-4B need? | About 300: on par on all four datasets, measured on records no label contains; none on product data like the public training data | [database](database/README.md#phase-12-how-many-of-your-own-labels-does-kev-4b-need) |
 | 13 | Are phase 10's close verdicts stable to the training seed? | Three of four; Kev-4B on amazon-google is on par with seeds 2 and 3 | [database](database/README.md#phase-13-are-phase-10s-close-verdicts-stable-when-only-the-training-seed-changes) |
 | 14 | Is Kev-0.8B's drop on movie reviews real? | It belongs to seed 1; the padding fix changes no result | [database](database/README.md#phase-14-is-kev-08bs-drop-on-movie-reviews-a-property-of-seed-1-or-of-training-without-padding) |
+| 16 | Can the query decide which rows get the expensive answer? | Mostly through the group key: picking rows by group needs 7–12× fewer labels than uniform or confidence-based sampling for per-group answers; weights, thresholds and rare categories add 1.0–1.4×, heavy join reuse 1.7–21×; second models cannot replace human labels | [database](database/README.md#phase-16-can-the-query-decide-which-rows-get-the-expensive-answer) |
 
 ## Jev and generative LLMs
 

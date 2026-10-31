@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- Phase 16 of the database experiments, run and analysed: which rows of a query deserve the expensive answer. Replays
+  cached answers on 15,388 movie reviews and 3,949 restaurant sentences with human labels; no model is called. Spending
+  human labels by the query's group key needs 7–12× fewer labels than uniform or confidence-based sampling for per-group
+  answers; weights, thresholds and rare categories add little, joins that repeat rows heavily up to 21×; second models
+  share Jev's errors and cannot replace the human labels. Results in `experiments/database/README.md`, protocol and
+  execution record in `experiments/database/protocol/p16.txt`, scripts `experiments/database/p16_*` and
+  `tests/test_p16.py`.
+- `kevdb.allocation`: spend a labelling budget on the rows a query's answer depends on (group key, weights, join counts)
+  and turn the labels into per-group estimates with 95% intervals that stay valid whatever the model's bias. Documented
+  in `docs/allocation.md`, demonstrated on cached answers by `experiments/database/p16_demo.py`.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added

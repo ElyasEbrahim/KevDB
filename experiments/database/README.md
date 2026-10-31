@@ -1,4 +1,4 @@
-# Decision models inside DuckDB (phases 0–10)
+# Decision models inside DuckDB (phases 0–16)
 
 This folder holds the experiments behind `kevdb`'s SQL functions (`src/kevdb/`): decision models executed as DuckDB
 functions for semantic predicates, and their probabilities used as "semantic statistics" by the database.
@@ -6,13 +6,26 @@ functions for semantic predicates, and their probabilities used as "semantic sta
 Phases 0–5 use the hosted Jev API (TypeSafe AI's decision model, which answers yes/no, multiple-choice and score
 questions with probabilities) and generative LLMs. From phase 6 on the subject is the open, Jev-compatible models that
 run on a laptop. Phases 0–5 ran on 2026-10-07, phase 6 on 2026-10-11, phase 7 on 2026-10-12/13, phases 8 and 9 on
-2026-10-13, phase 10 from 2026-10-16 to 2026-10-20. Other experiments (entity matching, classification, query plans) are
-listed in [experiments/README.md](../README.md).
+2026-10-13, phase 10 from 2026-10-16 to 2026-10-20, phases 11–14 from 2026-10-20 to 2026-10-23 and phase 16 on 2026-10-31
+(phase 15 is a plan on hold, not in this repository). Phase 16 asks which rows of a query deserve the expensive answer and replays the
+answers collected in phases 2–6. Other experiments (entity matching, classification, query plans) are listed in
+[experiments/README.md](../README.md).
 
 Every phase wrote its question, metrics, thresholds and stopping rules into [protocol/](protocol/) before any data
 was collected. Results added after seeing the data are marked as post hoc.
 
 ## Summary
+
+**Spending labels by the query (phase 16)**
+
+- **Row accuracy says little about the final answer.** With 91% of the movie reviews right, Jev's share of positive
+  reviews is 5.9 points low, a quarter of the movies are off by more than 10 points, and the bias differs by movie,
+  critic, publication and genre.
+- **Human labels spent by the query keep the answer reliable with far fewer labels, mostly through the group key.** For
+  per-group shares, picking rows by group needs 7–12× fewer labels than uniform or confidence-based sampling. The query's
+  weights, thresholds and rare categories add 1.0–1.4×; only joins that repeat rows heavily gain more (1.7–21×).
+- **Another model cannot stand in for the human labels.** Second models are wrong on 64–85% of the reviews Jev gets
+  wrong; used as the reference, their 95% intervals almost never cover the human truth.
 
 **Open models (phases 6–14)**
 
@@ -1048,6 +1061,106 @@ unrelated task, or may not. Check the tasks you care about after training, and t
 
 Cost: none. Machine time 5.2 h in one go: training 1.6–1.7 h per run, evaluation 4–5 min.
 
+### Phase 16: can the query decide which rows get the expensive answer?
+
+A query that aggregates a model's answers, say the share of complaints per region, does not need every row checked by
+the most expensive model or a person. Which rows matter depends on the query: an error in a large group barely moves an
+average, while one in a small group, in a rare category or in a record a join repeats many times moves it a lot. This
+phase measures how the cheap model's row errors reach the final answer, and whether choosing the rows to label from the
+query gives a reliable answer for fewer labels. Criteria: [protocol/p16.txt](protocol/p16.txt), frozen before any design
+was run on real labels; the plan and the check of earlier work: [protocol/p16_plan.md](protocol/p16_plan.md).
+
+**Data.** Every row has a human label, and every model answer was cached in earlier phases, so this phase replays them
+and calls no model.
+- Movie reviews: the 15,388 reviews of 172 movies in SemBench's larger movie table; the truth is the critic's own
+  fresh/rotten verdict. Jev's probability of "positive" on every row is the cheap answer. GPT 6 Luna on every row, Kev-9B,
+  Kev-4B, DeepSeek V4.1 Flash, DeepSeek V4 Pro and Qwen 3.8 Flash on 5,001 rows, and Opus 5.5 on 1,851 rows serve as second
+  models.
+- Restaurant sentences: MAMS, 3,949 sentences with 21 aspect questions each (1.2–73% of sentences say yes). Jev answered
+  all 21 in one request per sentence; Luna, DeepSeek V4.1 Flash and Kev-4B answered 1,000 sentences, Opus 546.
+
+**Queries.**
+- Large group (the control, where every row weighs the same): the share of positive reviews.
+- Small groups: the share per movie (172 groups of 4–503 reviews), the share per publication.
+- Weights: the mean of the 172 movie shares, and the same weighted by box office.
+- Joins that reuse rows: the share per genre through the movie–genre table (a review counts once in each of its movie's
+  1–6 genres), and the share over a fact table that repeats each review k times. k is heavy-tailed and simulated, so this
+  query is semi-synthetic: real labels and answers, simulated repetitions.
+- Threshold: which movies are fresh (at least 60% positive).
+- Rare categories: the 21 restaurant shares.
+
+**Designs.** Each design buys human labels for some rows and uses them to correct the cheap answer on every row. The
+estimate is therefore unbiased against the human truth whatever the model's bias. The designs differ only in which rows
+they pick:
+- uniformly;
+- by the model's confidence (active inference);
+- by the group key only, as ABae-GroupBy does (also run as published, without the correction);
+- query-aware: each row's influence on each output, taken from the query (group sizes, weights, how often a join repeats
+  the row, how close a movie is to the 60% line), times the expected error of the cheap answer, measured on a small human
+  pilot (30% of the budget).
+
+The comparison is the number of labels each design needs for the same error, with 95% intervals that must cover the
+truth (mean coverage at least 93%, the worst tenth of the outputs at least 90%). The query-aware design pays off if the
+best earlier design that meets this needs at least 1.5× its labels. Each query, design and budget is drawn 2,000 times.
+
+**Result: choosing rows from the query pays off only where a join repeats rows many times. For per-group answers the group
+key alone picks the right rows, and needs 7–12× fewer labels than uniform or confidence-based sampling.**
+
+![Per-movie error of Jev's count against the movie's size](report/figures/p16_propagation.en.png)
+
+*Error of each movie's share of positive reviews when Jev's yes/no answers are counted. Only 31% of the squared error
+follows from the whole table's error rates; 21% of the movies lie beyond what independent errors at those rates allow
+(5% expected).*
+
+![Labels needed by each design, relative to the query-aware design](report/figures/p16_allocation.en.png)
+
+*Labels each design needs to reach the query-aware design's error at the primary budget: 2,000 labels for per-group
+answers, 500 for single numbers, 400 sentences for the restaurant shares. \* Simulated repetitions.*
+
+![Second models: shared errors, and coverage when one replaces the human labels](report/figures/p16_second_models.en.png)
+
+*Left: error rates of the second models on all reviews and on the reviews Jev gets wrong. Right: 95% intervals for the
+share of positive reviews when a second model's answers replace the human labels, with 13% of the rows labelled.*
+
+- **Row accuracy says little about the answer.** With 91% of the reviews right, the share of positive reviews is 5.9
+  points low (7.4% of the rows are false negatives, 1.5% false positives). That is bias, not noise, so more rows do not
+  shrink it. A quarter of the movies are off by more than 10 points (the worst by 40), and 17 of 172 fresh/rotten verdicts
+  flip. The bias differs by movie, critic, publication and genre (each p = .001, the smallest a 1,000-shuffle test gives).
+- **For groups, knowing the group key is enough.** Per movie, per genre and for the mean of the movie shares, the
+  query-aware design and the group-key design pick the same rows. Uniform sampling needs 8–12× their labels, sampling by
+  confidence 7–10×. ABae-GroupBy as published, which does not correct the model with the labels, needs 1.6×.
+- **The query's further structure pays off only for heavy reuse.** Weighting by box office saves 1.4× over the group key,
+  and favouring the movies near 60% saves 1.23× (0.84 against 1.11 wrong verdicts at 2,000 labels); both stay under the
+  1.5× line. When the fact table repeats reviews with a heavy-tailed count, the group-key design needs 1.7×, 14× and 21×
+  the labels. The real genre table repeats a review at most six times, which gains nothing. On the 21 restaurant shares
+  the query-aware design does no better than sampling by confidence, or even uniformly (they need 0.95–0.96× its labels).
+- **The human pilot found the errors no better than the model's confidence.** Confidence in its place needed 0.95–1.10×
+  the labels.
+- **Second models share Jev's errors, so they cannot replace the human labels.** On the reviews Jev gets wrong, the other
+  models are wrong 64–85% of the time (on all reviews 7–13%). With a second model's answers in place of human labels, the
+  95% intervals cover that model's own share of positive reviews 94–95% of the time and the human truth 0–0.1% (Luna,
+  DeepSeek V4.1 Flash, Kev-9B, Opus). Per movie, Luna and DeepSeek miss the line, Opus and Kev-9B stay within it. On the
+  restaurant shares, Luna, DeepSeek and Opus each cover the truth less than 80% of the time on at least 81% of the
+  predicates. A second model as a middle tier before the human labels saves at most 1.06× of the cost when a human label
+  costs 100 model calls (the line was 1.2×).
+- **One calibration for the whole table hides the group bias.** Jev calibrated on uniform labels and applied to every
+  movie (phase 3's method) covers the true share of a movie 16% of the time, of a genre 28%.
+- Secondary: with Kev-4B as the cheap model on the 5,001 reviews and 1,000 sentences, the ordering of the designs is the
+  same. At those smaller budgets (162 labels for a single number) the query-aware design's intervals fall short of the
+  line on the heavy-tailed join. A pilot of 15% instead of 30% changes the error by −6% to +14%, one of 50% by −4% to +27%.
+  Per publication (1,492 groups) the group key is again enough.
+- **Against the expectations written before the run**: as expected, the control and the plain groups gain nothing over
+  the group key, and the global calibration misses the genres. Weights and the threshold gain less than expected, and
+  the rare restaurant categories nothing. The human pilot was expected to beat confidence on the restaurant data and did
+  not. Uniform and confidence-based sampling were expected to miss the coverage line on the movie groups: they meet it,
+  but only because a movie they leave without labels gets the honest interval [0, 1].
+
+**What it means for `kevdb`.** For an aggregate you can rely on, give the engine the query's group key, weights and join
+counts. Spend human labels by each row's influence and the model's uncertainty, and correct the model with them rather
+than trusting it or a second model. [`kevdb.allocation`](../../docs/allocation.md) does this in DuckDB.
+
+Cost: none (answers replayed from the cache). Machine time: 3 minutes for 899 settings × 2,000 draws.
+
 ## Limitations
 
 - Two datasets and one LLM as upper model. The published systems' times and costs were measured in 2025 with Gemini 2.5
@@ -1104,6 +1217,12 @@ Cost: none. Machine time 5.2 h in one go: training 1.6–1.7 h per run, evaluati
   seed 1 and are therefore not independent draws.
 - Phase 14: three arms and one model. It separates seed 1 from the padding, not the replay sample from the record order,
   which one seed fixes together.
+- Phase 16: two datasets of 15,388 and 3,949 rows, not millions; designs are compared at the same share of the table.
+  Heavy reuse by a join is semi-synthetic (real labels and answers, simulated repetitions); the real join repeats a review
+  at most six times. The pilot share was fixed at 30% (15% and 50% are reported beside it). The human labels are the
+  truth by definition; on movie reviews they are the critic's verdict, which the snippet does not always reveal. A
+  label's price is not known, so budgets are counted in labels; the three-tier reading assumes a price of 100 model
+  calls. Second models exist only on subsets (5,001, 1,851, 1,000 and 546 rows), so those readings run on the subsets.
 - Phase 9: 128 reviews of one movie and one pair of opposite questions; the truth is the critics' overall verdict, not the
   text's sentiment, so no form reaches a high F1. Pairs are not independent, so intervals resample reviews. Kev-4B ran one
   question and one k. Times measured once. Packing with the second review kept in the state (phase 8's S) was not tested,
@@ -1168,6 +1287,12 @@ The primary analysis, success criteria and stopping rules of each phase were wri
   variable, so the first rehearsal run loaded phase 10's real training file. It was stopped 35 s in, before any training
   step, with nothing saved or asked. The script was fixed, a test now checks every phase's rehearsal variable, and the
   rehearsal was repeated from empty folders. All of it is recorded in protocol/p14.txt.
+- Phase 16 had one deviation. After the first formal run, a bug against the frozen interval rule was found: an output
+  with no labelled row where it varies got a zero-width interval at the cheap model's estimate, which the rule allows only
+  when every row of the output is labelled. It was fixed, recorded in protocol/p16.txt, and every setting was run again;
+  no primary reading changed (the first run is kept). Before the freeze, three rules were set on simulated labels in the
+  rehearsal: Student's t intervals (normal ones covered the smallest movies 88% of the time), the error decomposition
+  only on group queries, and the second-model line read on the query-aware design.
 - The follow-up's size was set by the remaining balance. OpenRouter reserves credit per in-flight request based on its
   output limit and rejects concurrent requests when the balance is low, so collection took three runs (lower output
   limit, less concurrency, waiting after rejections); no answer was analysed between them.
@@ -1252,10 +1377,16 @@ P7_NO_REPORT=1 ./experiments/database/p7_run.sh --model kev-0.8b && P7_MODEL=kev
 # Phase 14: Kev-0.8B's seed 1 again, through the padding launcher. Uses phase 10's data and the results of phases 10 and 13; no API key, free
 ./experiments/database/p14_run.sh --rehearsal                     # optional: the whole run on made-up rows, about 7 min
 ./experiments/database/p14_run.sh                                 # about 5.2 h on an M3 Max with 64 GB; out/database/p14/report.txt
+
+# Phase 16: which rows deserve the expensive answer. Replays the answers of phases 2, 4, 5 and 6; no API key, no model, free
+./experiments/database/p16_run.sh --rehearsal                     # optional: the whole run on simulated labels, about 3 min
+./experiments/database/p16_run.sh                                 # about 3 min with 14 processes; out/database/p16/report.txt
+.venv/bin/python experiments/database/p16_figures.py              # the three figures, into report/figures/
+.venv/bin/python experiments/database/p16_demo.py                 # the same estimate through kevdb.allocation in DuckDB
 ```
 
 The actual cost of running everything: Jev about $3.4 (plus $0.45 for phase 6, $0.03 for phase 7, $1.29 for phase 8,
-$1.31 for phase 9; phases 10–14 used no paid service), OpenRouter $19.97 (the whole $20 top-up). Results go to `out/database/` (not committed), with a
+$1.31 for phase 9; phases 10–16 used no paid service), OpenRouter $19.97 (the whole $20 top-up). Results go to `out/database/` (not committed), with a
 `report.txt` or similarly named text file per phase.
 
 ## Report

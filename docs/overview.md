@@ -68,6 +68,12 @@ Each task uses public data with known answers and compares Jev with a small LLM 
 | [Own labels](../experiments/database/README.md#phase-12-how-many-of-your-own-labels-does-kev-4b-need) | trains on 100, 300 or 1,000 labels of the data set itself | records split so that no test record is in any label | on par on all four data sets at 300 labels; none needed on two |
 | [Seeds](../experiments/database/README.md#phase-13-are-phase-10s-close-verdicts-stable-when-only-the-training-seed-changes) | retrains close cases with other random seeds | the same data as phase 10 | 3 of 4 verdicts hold; [Kev-0.8B's drop on movie reviews](../experiments/database/README.md#phase-14-is-kev-08bs-drop-on-movie-reviews-a-property-of-seed-1-or-of-training-without-padding) belongs to one seed |
 
+## 5. Which rows deserve the expensive answer (phase 16, 31 October)
+
+| Task | What it does | Data | Result |
+| --- | --- | --- | --- |
+| [Spending labels by the query](../experiments/database/README.md#phase-16-can-the-query-decide-which-rows-get-the-expensive-answer) | buys human labels for the rows a query's answer depends on (group sizes, weights, rows a join repeats, closeness to a threshold) and corrects Jev's answers with them | 15,388 movie reviews of 172 movies and 3,949 restaurant sentences × 21 questions, human labels; cached answers of Jev and seven other models, replayed | per-group answers reliable with 7–12× fewer labels than uniform or confidence-based sampling, and the group key alone picks those rows; further query structure pays off only for joins that repeat rows heavily (1.7–21×); other models share Jev's errors (64–85%) and cannot replace the human labels |
+
 ## Limits that apply throughout
 
 - Public benchmarks, which the models may have seen in training.

@@ -1,0 +1,252 @@
+2026-10-31T03:24:13Z  written before any phase 16 arm was run on real labels. Status: the standard of phase 16, not yet frozen; a dated block with the checksums of the scripts and inputs and the rehearsal's result is appended before the run, and from then on nothing above that block changes.
+
+Phase 16: query-aware allocation of inference cost.
+
+The owner's instruction (2026-10-31), after the plan protocol/p16_plan.md of 2026-10-30 and its three recommended decisions (scope as
+written; phase 16 of experiments/database; after the run, if the method holds, a small src/kevdb module with a DuckDB demo): "Just follow
+your own suggestion—that'll work perfectly! Let's get started!"
+
+QUESTIONS
+1. Propagation: how do the cheap model's row-level errors turn into the error of a query's final answer, by query shape?
+2. Allocation: if the engine buys human labels for rows chosen from the query (each row's influence on the answer), is the answer
+   reliable against human labels at lower cost than with designs that ignore the query or rely on the model's confidence?
+3. Systematic bias and correlated errors: does the cheap model's error depend on the group; does a second model share its errors, so that
+   using it as the reference gives a confidently wrong answer; does a human pilot (instead of confidence) change cost or validity?
+Prior work (checked in the papers' text, p16_plan.md section 2) already allocates by GROUP BY with guarantees relative to an oracle
+(ABae-GroupBy, BaS) and by influence in statistics (active inference, OPAL). This phase proposes no new estimator; it tests the
+engine-level combination (influences from the plan, a design-based correction, residuals measured by a human pilot) against them.
+
+SEEN BEFORE THIS STANDARD (disclosed; descriptive only, from the inventory of 2026-10-30)
+Phase 3-5 results. On D1: Jev 91.1% right per row; threshold count 75.4% against 81.3%; false negatives 7.4% of rows, false positives
+1.5%; Luna's count 72.9%; by genre (>= 200 reviews) Jev's count is off by -1.7 to -9.6 points; it flips the 60% verdict of 17 of 172
+movies; 10 movies lie within 5 points of 60%; when Jev is wrong, Luna is wrong 80% of the time, the 5,001-row models 67-85%, Opus 64%;
+8.7% of Jev's errors have p <= 0.1 or >= 0.9. On D2: Jev's count is off by -10.8 to +40.3 points per predicate; when Jev is wrong, Luna
+is wrong 21-89% of the time per predicate. Structure-only variance ratios (constant residual) of uniform against influence-proportional
+sampling: 6.5 (Q2, Q3a, Q3b), 7.2 (Q4a), 1.08 (genre reuse alone). No design, estimator or interval of this standard has been computed
+on real labels.
+
+DATA (all cached; human labels on every row; no model is called)
+D1   movie reviews: SELECT DISTINCT id, reviewId, ... FROM SemBench sf_16000/Reviews.csv, 15,388 rows; key = id|reviewId; truth y =
+     (scoreSentiment = POSITIVE); text key = first 16 hex digits of sha256(reviewText). Cheap model: Jev P(positive) from
+     out/database/p2/jev.positive.jsonl. Second model on all rows: GPT 6 Luna yes/no (p2/luna.low.positive.jsonl). Movies.csv is grouped
+     by id (187 rows, 172 ids; the repeated rows must agree on genre and boxOffice, else stop): genre list split on ',', box office
+     "$xM"/"$xK" parsed, missing for 11 movies.
+D1-5k  the 5,001 rows whose text is in p2/v41flash.off.positive.jsonl: Kev-4B and Kev-9B probabilities (p6/movie.kev-4b.jsonl,
+     p6/movie.kev-9b.jsonl), DeepSeek V4.1 Flash, DeepSeek V4 Pro, Qwen 3.8 Flash (p2, field p_true = probability, p = yes/no).
+D1-1.85k  the 1,851 rows whose text is in p5/movie.opus.jsonl: Opus 5.5 yes/no.
+D2   MAMS: the 3,949 sentences of p4_collect.sentences(), 21 predicates in p4_collect.PREDICATES order; truth from the annotations; cheap
+     model Jev packed (p4/mams.jev.packed.jsonl).
+D2-1k  the 1,000 sentences of p4/mams.luna.low.packed.jsonl: Luna and DeepSeek V4.1 Flash packed yes/no, Kev-4B packed probabilities
+     (p6/mams.packed.kev-4b.jsonl). D2-546: Opus 5.5 packed yes/no (p5/mams.opus.packed.jsonl).
+Folds: f_i = parity of the first hex digit of sha256("p16|<dataset>|<key>"), fixed, independent of labels.
+Score bins of the cheap probability p: [0, .1), [.1, .3), [.3, .7), [.7, .9), [.9, 1].
+
+QUERIES (influence a_ik of row i on output k, from structured columns only; requirement h = target 95% half-width)
+Q1    share positive over D1; a = 1/N; h = .01.
+Q2    share positive per movie (172 outputs); a = 1/n_movie; h = .10.
+Q2b   share positive per publication (1,492 outputs, secondary); a = 1/n_pub; h = .10.
+Q3a   mean of the 172 movie shares; a_i = 1/(172 n_m(i)); h = .01.
+Q3b   box-office-weighted mean of the 161 movie shares with box office; a_i = BO_m(i)/(n_m(i) sum BO); h = .01.
+Q4a   share positive per genre through the movie-genre bridge (20 outputs); a_ik = 1/n_k if genre k is one of the review's movie's
+      genres (a review feeds 1-6 outputs); h = .05.
+Q4b   share positive over a fact table in which review i appears k_i times, semi-synthetic: k_i = 1 + floor(exp(sigma Z_i + tau top_i)),
+      Z_i standard normal from numpy default_rng(20261031) over rows sorted by key; Q4b-1 sigma = 1, tau = 0; Q4b-2 sigma = 2, tau = 0;
+      Q4b-2t sigma = 2, tau = ln 5 (top critics' reviews appear 5 times more often at the median). a_i = k_i/sum k; h = .01.
+Q5    HAVING share >= 60% per movie (Q2's estimates): a movie is wrong if its true share >= .65 and the estimate < .60, or its true
+      share < .55 and the estimate >= .60 (inside the band either verdict is accepted).
+Q6    the 21 predicate shares on D2; a = 1/N per predicate; one label answers all 21; h_k = max(.01, .25 theta_k) with the true share.
+Budgets B (expected labelled rows; D2: sentences) and the primary budget B*:
+  Q1, Q3a, Q3b, Q4b: 100, 200, 500, 1,000, 2,000; B* = 500.   Q2, Q4a, Q5: 500, 1,000, 2,000, 4,000; B* = 2,000.
+  Q2b: 2,000, 4,000, 8,000; B* = 4,000.   Q6: 100, 200, 400, 800; B* = 400.
+
+DESIGNS (each gives the inclusion probability pi_i of the final labelled set; labels of a row cost once however often it is drawn)
+Water-filling W(u, T): pi_i = min(1, lambda u_i) with lambda such that the sum is T. Mixture: pi <- .8 pi + .2 T/n (all designs except
+U, labels-only, global calibration and abae). Single-stage designs are computed per fold j with target B N_j/N.
+U    pi = B/N.
+C    u_i = sqrt(p_i(1-p_i)) on D1; sqrt(sum_c p_ic(1-p_ic)) on D2 (raw cheap probabilities).
+QU   u_i = sqrt(sum_k a_ik^2/h_k^2).
+QC   u_i = sqrt(sum_k a_ik^2 p_ic(1-p_ic)/h_k^2), c the predicate of output k; on D2 h_k is replaced by max(.01, .25 mean_i p_ik).
+Two-stage designs (QP, G, D): stage 1 pi1 = .3 B/N for every row. For the rows of fold j, everything in stage 2 is computed from the
+other fold's stage-1 sample only (S1 of fold 1-j): a linear calibration c(p) = alpha + beta p fitted by least squares on it (per
+predicate); squared residuals r^2 = (y - c(p))^2 of its rows; per cell the shrunk mean squared residual
+  s2_cell = (n_cell m_cell + 10 m_bin)/(n_cell + 10), m = mean r^2 over the stage-1 rows of the cell, the cell's score bin (or all rows
+  if the bin has none);
+scores u_i below; target T2_j = (B N_j/N - N_j pi1)/(1 - pi1); pi2 = mixture(W(u, T2_j)) within fold j; final pi_i = 1 - (1-pi1)(1-pi2_i).
+QP   (primary) u_i = sqrt(sum_k a_ik^2 s2_cell(i,c)/h_k^2); on D2 h_k is replaced by max(.01, .25 hbar_k), hbar_k = mean_i c_k(p_ik).
+G    as QP with the group-key-only influence and requirement: Q1, Q4b: a = 1/N, h = .01; Q2, Q2b, Q4a, Q5: a and h of the query (the
+     outputs are its groups); Q3a, Q3b: a_i = 1/(G n_m(i)) over the query's G movies, h = .01; Q6: a = 1/N, h = .01 for all predicates.
+D    (Q5) as QP with h_k = max(.05, |t_k - .60|), t_k = sum_i a_ik c(p_i) (the calibrated cheap share of movie k).
+Cells (QP, G, D): score bin x group key; group key: Q2, Q3a, Q3b, Q5 movie; Q2b publication; Q4a the movie's genre set; Q1, Q4b top
+critic; Q6 none (per predicate).
+abae (ABae and ABae-GroupBy as published, Kang et al. 2021): strata = group key (movie for Q2, Q3a, Q4a, Q5; the 161 box-office movies
+for Q3b; publication for Q2b; none for Q1, Q4b) x K quantile strata of p within the group, K = min(5, max(1, floor(n1/100))), n1 =
+stage-1 labels per group; stage 1 = .3 B labels split equally over strata (capped by stratum size, the remainder split again), simple
+random samples within strata; a stratum's stage-1 standard deviation of a 0/1 statistic is sqrt(m(1-m)) with m = (sum y + 1)/(n + 2),
+so that a stratum whose few stage-1 labels agree is not taken as certain; stage 2 = .7 B: scalar queries Neyman over strata on the
+statistic (y; k y for Q4b), group queries
+minimax over groups (Neyman within a group, group budgets equalising the estimated variance of the group estimates); estimator: the
+stratified mean pooling both stages, variance sum W_s^2 (1 - n_s/N_s) var_s/n_s (var_s = ybar_s(1-ybar_s) if n_s = 1); Q3a, Q3b, Q4a are
+combined from the per-movie estimates with their weights. Q6: one ABae per predicate with B/21 sentences each, each predicate estimated
+from its own sample only (the per-operator approach).
+labels-only  U's sample, Hajek estimate per output (labelled rows only); an output without labelled rows gets estimate .5 and the
+     interval [0, 1].
+global calibration  U's sample; c(p) fitted on all labelled rows; theta_k = sum_i a_ik c(p_i); variance from the coefficients' sandwich
+     covariance only (assumes the bias does not depend on the group).
+
+COMMON ESTIMATOR (U, C, QU, QC, QP, G, D)
+Cross-fitted calibration: rows of fold j use c fitted on fold 1-j (single-stage: all its labelled rows, weights 1/pi; two-stage: its
+stage-1 rows); fewer than 10 rows or no spread in p -> c(p) = p. With yhat = c(p):
+  theta_k = sum_i a_ik yhat_i + sum_i xi_i a_ik (y_i - yhat_i)/pi_i,   V_k = sum_i xi_i a_ik^2 (y_i - yhat_i)^2 (1 - pi_i)/pi_i^2.
+Because c and pi of a row depend only on the other fold's sampling, the estimate is exactly unbiased under every design.
+INTERVALS (every design): theta_k +- t sqrt(V_k), t the .975 quantile of Student's t with df_k degrees of freedom, clipped to [0, 1];
+df_k = labelled rows of output k's support drawn with pi < 1, minus 1 (labels-only, abae and S5: labelled rows of the support minus 1;
+global calibration: labelled rows minus 2). V_k = 0 (every row of the support drawn with certainty) gives the point; V_k > 0 with
+df_k < 1 gives [0, 1]. Q5's family-wise intervals use the same rule at level 1 - .025/K.
+
+REPLICATIONS
+2,000 per (population, query, design, budget). Common random numbers: for population d and replication r, U1, U2 ~ Uniform(0,1)^N from
+numpy Generator(PCG64(SeedSequence([20261031, d, r]))); stage-1 or single-stage draws xi = U1 < pi, stage 2 xi2 = U2 < pi2; abae takes,
+within each stratum, the rows in increasing U1, and breaks ties of integer allocations by U2 of each stratum's first row. Extra streams
+(the first array of SeedSequence([20261031, d, r, s])): s = 1000 + c orders the rows of predicate c for abae on Q6; s = 3 for S5's
+extra draw.
+
+METRICS (against the human labels of the whole population)
+Per output: bias, RMSE, coverage of the 95% interval, mean half-width, share of replications with at least two labelled rows in its
+support. Loss of a replication: mean over outputs of (error_k/h_k)^2. Q5: number of wrong movies; share decided and errors among decided
+with family-wise intervals (z for .05/172). Realised labels.
+Labels needed by design X on query Q: the budget at which X's mean loss equals the primary design's mean loss at B*, interpolating log
+loss linearly in log B on the grid, extrapolating with slope -1 beyond it; rho_X = that budget / B*. Q5 uses the expected number of wrong
+movies + .1 in place of the loss.
+Coverage line: at B*, mean coverage over outputs >= .93 and its 10th percentile >= .90 (a scalar: >= .93).
+
+READINGS
+Primary, for each of Q2, Q3a, Q3b, Q4a, Q4b-1, Q4b-2, Q4b-2t, Q5, Q6 (primary design P = QP, D for Q5; prior designs U, C, G, abae):
+  "pays off" if P meets the coverage line and every prior design that meets it has rho >= 1.5;
+  "gain in validity" if P meets the coverage line and no prior design does;
+  otherwise "does not pay off" ("not reliable" if P misses the coverage line).
+  Per shape: small groups Q2; weights Q3a, Q3b; join reuse Q4a, Q4b-1, Q4b-2, Q4b-2t; threshold Q5; rare categories Q6 ("k of n").
+  Q1 is the control: the influence is the same for every row, so a gain there cannot come from the query; it is reported, with QU/QC, as
+  the share of gains elsewhere that may come from the pilot's residuals.
+Bias-aware: the pilot pays off on a query if rho_QC >= 1.2, or QC misses the coverage line where QP meets it.
+G and QP coincide by construction on Q2, Q3a and Q4a (same influence, requirement and cells); identical results there check the code.
+
+SECONDARY (readings without a verdict line unless stated)
+S1 Kev-4B as the cheap model, and Jev on the same rows: D1-5k (Q1, Q2, Q3b, Q4a, Q4b-2) and D2-1k (Q6); designs U, C, G, QU, QC, QP;
+   budgets = the grid times N_sub/N, rounded, at least 20; the primary reading applied.
+S2 pilot share .15 and .50 for QP and G at B*: loss relative to .30.
+S3 Q2b with every design.
+S4 a second model as the reference (no human labels): U and QP with the second model's yes/no in place of y (D1 Luna; D1-5k Kev-9B >= .5,
+   DeepSeek V4.1 Flash yes/no; D1-1.85k Opus; D2-1k Luna, DeepSeek; D2-546 Opus) on Q1, Q2, Q3b (D1 sets) and Q6 (D2 sets), at the
+   budget fraction of B* and of the largest grid budget. Coverage of the second model's full answer and of the human truth. Line (on
+   QP, whose intervals are valid for the second model's own answer; U is reported beside it): unreliable against human labels if, at
+   the largest budget, the intervals cover the truth in fewer than 80% of replications for at least a third of the outputs (a scalar:
+   below 80%).
+S5 three tiers (cheap model on all rows, second model on a sample A, humans on H in A): H = QP's labelled set; A = H plus extra rows so
+   that P(i in A) = min(1, m pi_i), m = 3 and 10; tier-2 predictor q~ = linear least squares of y on (p, q), cross-fitted on the other
+   fold's stage-1 rows; theta = sum a yhat + sum_A a (q~ - yhat)/P(i in A) + sum_H a (y - q~)/pi. Populations D1 (Luna), D1-5k (Kev-9B,
+   DeepSeek probability), D2-1k (Luna, DeepSeek); queries Q1, Q2 (D1 sets), Q6. Line: the second model is worth adding if, at a human
+   price of 100 second-model calls, it reaches QP's loss at B* for at most 1/1.2 of QP's cost (also reported at 10 and 1,000).
+Propagation (no sampling): for each query and model-only answer (Jev count and mean probability, Luna, the subsets' models, Kev-4B),
+   per-output error and the share of outputs off by more than h. For yes/no answers: on the group queries (Q2, Q2b, Q4a) the share of
+   the squared error predicted by the population's false-positive and false-negative rates, and the remainder standardised by its
+   standard deviation under independent errors at those rates (share beyond 1.96, its variance); on scalar queries the error those rates
+   predict next to the actual error (on Q6 each output is a whole predicate, so the rates predict it exactly and nothing is split).
+   Cascades: the least confident 5, 10, 30% of rows (by |p - .5|) answered by the second model.
+Bias by group: for movie, critic, publication, genre, top critic, review-length tertile and score bin (D1) and per predicate (D2), the
+   between-group spread of residuals after one population-wide calibration, with a permutation test (1,000 shuffles of residuals over
+   rows, seed 20261031; "heterogeneous" if p < .01); intraclass correlation of residuals; share of errors with p <= .1 or >= .9; for each
+   second model P(wrong | Jev wrong) against its error rate.
+
+EXPECTATIONS (written now, so that they can be wrong)
+Q1 no gain. Q2, Q3a, Q4a: QP = G, and >= 3x fewer labels than U and C. Gains over G only where the query carries more than a group key:
+Q3b modest, Q4b large (PPS on the fan-out; above all Q4b-2), Q5 (most movies are far from 60%) and Q6 (relative requirement on rare
+predicates, and the per-predicate abae wastes labels). U and C miss the coverage line on Q2 and Q6. The global calibration under-covers
+the genres with the largest bias. QP = QC within 1.2x on D1 (Jev's errors are mostly unconfident), QP better on D2. Every second model as
+the reference misses the truth on D1 (shared false negatives) and on the D2 service predicates; a second tier pays off at most on D2.
+
+RULES
+Human labels are the truth; a second model's answers replace them only in S4 and serve as a predictor only in S5. A design may use the
+structured columns, the cheap model's answers and the labels it has drawn, nothing else. No paid interface, no model server. Scripts:
+experiments/database/p16_data.py, p16_methods.py, p16_run.py, p16_report.py, p16_run.sh, tests/test_p16.py; outputs in out/database/p16
+(rehearsal in out/database/p16_rehearsal, on simulated labels only). Bugs found after the freeze are fixed, recorded below as deviations,
+and every cell is run again; analyses added after seeing results are labelled post hoc. Timestamps come from date. The run is detached
+from the session; no shell script is edited while it runs.
+
+2026-10-31T03:49:28Z  Before the run: what the rehearsal settled, the rehearsal with a failure drill, and the checksums of every script and input. Written before any phase 16 design, estimate or interval was computed on real labels. With this block the standard is frozen: nothing above it changes.
+
+Settled on simulated labels only, before this block (the text above already says it):
+- Intervals: Student's t with the df rule above. With the normal quantile, QP covered the smallest movies of Q2 (under 8 reviews) in
+  88% of replications on simulated labels, the largest in 94%. Mixing the scores with a constant before capping (instead of mixing the
+  probabilities 80/20) was tried and was worse for small movies (84%), so the probability mixture stays.
+- Propagation: the split by global error rates is reported on group queries only; on a scalar it is shown as predicted against actual
+  error (one simulated ratio was -306 because the actual error was tiny), and on Q6 it is exact by construction.
+- S4: the line is read on QP, whose intervals are valid for the second model's own answer; U is reported beside it.
+
+Rehearsal (P16_REHEARSAL=1: labels and second-model answers drawn by p16_data.simulate, with planted movie effects on D1 and predicate
+effects on D2; outputs in out/database/p16_rehearsal): 899 cells x 2,000 replications. Failure drill: the process group was stopped at
+03:44:40Z after 73 cells; no partial file was left and all 73 summaries were complete; the restart at 03:44:54Z skipped them and ran the
+other 826 in 144 s; the analysis then ran without error. Checks on the simulated labels (they say nothing about the real results): G and
+QP coincide on Q1, Q2, Q3a and Q4a (labels needed 1.00x); QP's coverage mean / 10th percentile: Q2 .963 / .941, Q4a .950 / .940,
+Q6 .947 / .942; U on Q2 .841 / .505.
+
+Formal run: ./experiments/database/p16_run.sh, detached from the session, outputs in out/database/p16 (about 4 minutes).
+
+Scripts and inputs (sha256), frozen with this block
+bc9da3d213de527f576f1695ffd8bc85cd237cb28d4b0175e84381361295a523  experiments/database/p16_data.py
+50cb74fd1db22f5fbe26c0ccf4003e55e2d28bd0444a917d64a829b7c48a6a2c  experiments/database/p16_methods.py
+33f1085b04dedba59f199e7b0f14082b4f7c40f367cebd38f60d929269234194  experiments/database/p16_run.py
+c6770e2d02c62ce9fb9ba9047905536f6c758b247fe9fcfbf30827a8a0dec899  experiments/database/p16_report.py
+4f96139d66c0ccaa9e5684735e26bc712650bf5cd836c3565138a504950bf681  experiments/database/p16_run.sh
+b7f936cce7f9520f41cabe318cdea3affb81118d1f7fec76fda2aef6bbf1c6c1  tests/test_p16.py
+3d237865b0dc34f3d45613847a0cf765d2bbf0a49d796cadbf25a68f740a4f07  experiments/database/p4_collect.py
+b026b37f1eff9c5ed42457c7d332a468969cb8c05d762628ae838f1874ee59b9  experiments/database/paths.py
+1cd351340cea641e58597d640c06d7018619580ca225fb59cee3d6b51f4f0d08  experiments/database/data/sembench/files/movie/data/sf_16000/Reviews.csv
+8382efffdaffc883bf535e935be2f5cf75bcf4a1eaf77131bcda261af4aa304e  experiments/database/data/sembench/files/movie/data/sf_16000/Movies.csv
+24c6a1a9f769ec5a9a1fc9a63077001339cec65317e3e72cf053d8055ec5f1ac  experiments/database/data/mams/train.xml
+d4536b0ced8e77f53f88ff1835fcf561e0de02e41a509982f76eb9b8a375b2ed  experiments/database/data/mams/val.xml
+cc0dc3c5b711653daa9ac886c6517d3ebf8752954b73715692d7765fec4a57f5  experiments/database/data/mams/test.xml
+15d26d5c61f8656424d1bed16183c41c61113c200b711a82433ed7b6fcc02d96  out/database/p2/jev.positive.jsonl
+29e59d3c846eed2437e701334d0706a34a3733cf6db4f37403b7fb1d8f24342f  out/database/p2/luna.low.positive.jsonl
+18d0f5353420609b50c3999400bd4eb8d7ea3cd55e1c5f33bc50f082d06fcde0  out/database/p2/v41flash.off.positive.jsonl
+d22e6142d1aba97e5566ccd6a19013252e68cf28b37e853d57de2e7657f09446  out/database/p2/v4pro.off.positive.jsonl
+b7cc720658d9bac26db7d4ff8caf9bdae73f5e0bf2ed7f2e8fed204f2b5c65d8  out/database/p2/qwen38flash.off.positive.jsonl
+3ae9925dfaade4ebc16561c4f751d23588600febe9109876beea209e777eb744  out/database/p5/movie.opus.jsonl
+c74f2eb7047ae2334ec2a15971c9b87363d5d84546463c40c4471fe9ced946fd  out/database/p6/movie.kev-4b.jsonl
+352520427c702ae87a5fa334f27e0792b00dcf7e5d91b2bf27087bce7641df26  out/database/p6/movie.kev-9b.jsonl
+c6b665aafe7d88644700104e95ec8c5ee94747c93ad1b3d23b7966826abc8a0a  out/database/p4/mams.jev.packed.jsonl
+0282495c12f3c54977cec3c402cff2324fc33c47fb15175b5ab39db9b4a2998a  out/database/p4/mams.luna.low.packed.jsonl
+7803e2ccb89e6d79f0116388dbe3f8263c32cf20c4312635e4f25525f290b476  out/database/p4/mams.v41flash.off.packed.jsonl
+70c821d53bef28fd7a3763b2f8ee3cc2d21910e77fb8881353e7e5aeced2a5c5  out/database/p6/mams.packed.kev-4b.jsonl
+f886c3304acfd963c0c3254b0c55e0d1ef94dc7eadb3829cac588b6e58ce038f  out/database/p5/mams.opus.packed.jsonl
+
+2026-10-31T03:55:51Z  Deviation 1, found after the first formal run (03:50:11-03:53:24Z), before any result was reported. A bug against the standard's interval rule.
+The rule above gives a zero-width interval when "V_k = 0 (every row of the support drawn with certainty)". The code gave it whenever
+V_k = 0, which also happens when no row of the support was labelled where the inclusion probability is below 1 (an output with no labels
+under U, C, QU, QC; a labels-only group whose single label or equal labels give no spread). Such an output then reported the cheap
+model's estimate as a point, which is not what the rule says. Seen in the first run's Q5 table: U and C "decided" movies wrongly in 98%
+of replications through these points. Fix (p16_methods.interval, p16_run.Accumulator): a zero-width interval only when every row of the
+output's support is labelled; any other V_k = 0 gives [0, 1]; a test checks it. Every cell is run again into out/database/p16; the first
+run is kept unchanged in out/database/p16/run1. Changed files (sha256):
+6bee00d303e0676e60d16d1d20bf61fc2cc47328c4319d5cf2ab43cb692adbfe  experiments/database/p16_methods.py
+2f5abc12a74e1ee59be43fd1cf07902700536871777a4ccb7e398330243cd4bb  experiments/database/p16_run.py
+750a118a6ce81e784271d75db1ad959a9150e667425c9e9d2a065e4930cf8b99  tests/test_p16.py
+
+2026-10-31T04:00:36Z  Execution record.
+Formal run (after deviation 1): 2026-10-31 03:56:03-03:59:23Z, ./experiments/database/p16_run.sh detached, 899 of 899 cells x 2,000
+replications, 0 errors, 194 s of cells plus the analysis; results in out/database/p16 (report.txt, results.json, cells/). The first run
+(03:50:11-03:53:24Z, before the fix) is kept in out/database/p16/run1. No model was called; nothing was spent.
+Primary readings, as the standard defines them: small groups 0 of 1 (Q2: QP and G coincide, as designed); weights 0 of 2 (Q3a: QP = G;
+Q3b: G needs 1.40x); join reuse 3 of 4 (Q4a: QP = G; Q4b-1: G 1.66x, Q4b-2: 14.0x, Q4b-2t: 20.8x); threshold 0 of 1 (Q5: G 1.23x);
+rare categories 0 of 1 (Q6: C 0.96x, QC 0.95x). Pilot against confidence: does not pay off on any query (QC 0.95-1.10x). Q1, the
+control: QP = G; U 1.33x, C 1.10x.
+
+2026-10-31T04:17:52Z  Added after the run, on the owner's word ("Go ahead with both!"); none of it changes a reading above.
+- experiments/database/p16_figures.py: the three figures of the README section, drawn from out/database/p16/results.json and
+  the cached answers (report/figures/p16_*.en.png and .pdf).
+- kevdb.allocation (src/kevdb/allocation.py, tests/test_allocation.py, docs/allocation.md): the design QC of this standard
+  (influence from the query times the model's uncertainty, one round, no pilot, since the pilot did not pay off), with the
+  common estimator and the interval rule. A test checks on synthetic tables that it reproduces p16_methods' QC exactly
+  (inclusion probabilities, chosen rows, estimates and intervals over 20 draws). Its numbers in docs/allocation.md are this
+  run's labels needed divided by QC's (post hoc arithmetic on the frozen run; QC met the coverage line on every primary query).
+- experiments/database/p16_demo.py: one draw of three queries in DuckDB through jev_noul replayed from phase 2's cache (a
+  request outside the cache fails instead of being sent; 15,385 hits, none sent) and kevdb.allocation; out/database/p16/demo.txt.
